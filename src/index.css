@@ -1,0 +1,115 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-display: 'Outfit', system-ui, -apple-system, sans-serif;
+    --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  }
+
+  html,
+  body,
+  #root {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    background-color: #0b0d14;
+    color: #f4f6fb;
+    font-family: var(--font-sans);
+    touch-action: none;
+    overscroll-behavior: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+.font-display {
+  font-family: var(--font-display);
+}
+
+.font-mono-num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.hud-text-shadow {
+  text-shadow: 0 2px 6px rgba(6, 8, 14, 0.9), 0 0 2px rgba(6, 8, 14, 0.95);
+}
+
+/* Custom thin scrollbar for world map / modal sheets */
+.colorix-scroll::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.colorix-scroll::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.04);
+}
+.colorix-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 3px;
+}
+.colorix-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.35);
+}
+
+/* Loading Screen Neon & Stripe Animations (compositor-friendly) */
+@keyframes colorixLogoGlow {
+  0%, 100% {
+    filter: drop-shadow(0 0 14px rgba(34, 211, 238, 0.55)) drop-shadow(0 0 34px rgba(139, 92, 246, 0.42));
+  }
+  50% {
+    filter: drop-shadow(0 0 22px rgba(34, 211, 238, 0.82)) drop-shadow(0 0 48px rgba(236, 72, 153, 0.52));
+  }
+}
+
+@keyframes colorixStripeSlide {
+  from {
+    transform: translate3d(0, 0, 0);
+  }
+  to {
+    transform: translate3d(32px, 0, 0);
+  }
+}
+
+@keyframes colorixDotPulse {
+  0%, 20% {
+    opacity: 0.2;
+  }
+  45%, 80% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0.2;
+  }
+}
+
+.colorix-logo-neon {
+  animation: colorixLogoGlow 3.2s ease-in-out infinite;
+}
+
+.colorix-bar-stripes {
+  animation: colorixStripeSlide 0.9s linear infinite;
+  will-change: transform;
+}
+
+.colorix-dot-1 {
+  animation: colorixDotPulse 1.35s ease-in-out infinite;
+  animation-delay: 0s;
+}
+.colorix-dot-2 {
+  animation: colorixDotPulse 1.35s ease-in-out infinite;
+  animation-delay: 0.22s;
+}
+.colorix-dot-3 {
+  animation: colorixDotPulse 1.35s ease-in-out infinite;
+  animation-delay: 0.44s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
