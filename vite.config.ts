@@ -6,7 +6,7 @@ import path from 'path';
 import {defineConfig, type Plugin} from 'vite';
 
 const ROOT_DIR = import.meta.dirname;
-const AUDIO_RANGE_CHUNK_BYTES = 2 * 1024 * 1024; // 2 MiB per 206 Partial Content chunk (well below 32 MiB proxy caps)
+const AUDIO_RANGE_CHUNK_BYTES = 8 * 1024 * 1024; // 8 MiB per 206 chunk (contiguous for 5.8 MB track, safely below 32 MiB proxy caps)
 
 function resolveAudioAssetPath(reqUrl: string): string | null {
   const pathname = reqUrl.split('?')[0];

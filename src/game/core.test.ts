@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { BGM_TRACK_URL, computeEffectiveMusicVolume } from './audio';
+import {
+  BGM_TRACK_URL,
+  computeEffectiveMusicVolume,
+  diagnoseInvalidAudioPayload,
+  isValidMp3Bytes,
+} from './audio';
 import { COLOR_PALETTE, COLOR_MAP, getBackgroundRgb, lerpRgb } from './colors';
 import {
   computeDisplayProgress,
@@ -306,6 +311,16 @@ test('Background music settings compute effective volume and persist musicEnable
   assert.equal(disabledSaved.settings.musicEnabled, false);
   assert.equal(disabledSaved.settings.musicVolume, 0.35);
   assert.equal(disabledSaved.settings.muted, true);
+
+  // MP3 header validator recognizes ID3 and MPEG frame sync while diagnosing HTML / Git LFS payloads
+  assert.equal(isValidMp3Bytes(new Uint8Array([0x49, 0x44, 0x33, 0x04, 0x00])), true);
+  assert.equal(isValidMp3Bytes(new Uint8Array([0xff, 0xfb, 0x90, 0x64])), true);
+  const htmlBytes = new TextEncoder().encode('<!doctype html><html></html>');
+  assert.equal(isValidMp3Bytes(htmlBytes), false);
+  assert.match(diagnoseInvalidAudioPayload(htmlBytes), /HTML/i);
+  const lfsBytes = new TextEncoder().encode('version https://git-lfs.github.com/spec/v1\n');
+  assert.equal(isValidMp3Bytes(lfsBytes), false);
+  assert.match(diagnoseInvalidAudioPayload(lfsBytes), /Git LFS/i);
 });
 
 test('Loading system tracks essential tasks accurately, keeps optional audio non-fatal, and blocks only on essential errors', () => {

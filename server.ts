@@ -5,7 +5,7 @@ import path from 'path';
 
 const ROOT_DIR = import.meta.dirname;
 const PORT = Number(process.env.PORT) || 3000;
-const AUDIO_RANGE_CHUNK_BYTES = 2 * 1024 * 1024; // 2 MiB per 206 Partial Content chunk (stays safely below 32 MiB proxy limits)
+const AUDIO_RANGE_CHUNK_BYTES = 8 * 1024 * 1024; // 8 MiB per 206 chunk (contiguous for 5.8 MB track, safely below 32 MiB proxy caps)
 
 function resolveAudioAssetPath(reqUrl: string, isProduction: boolean): string | null {
   const pathname = reqUrl.split('?')[0];

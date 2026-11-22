@@ -52,6 +52,32 @@ export function describeMediaError(audio: HTMLAudioElement): string {
   }
 }
 
+export function isValidMp3Bytes(bytes: Uint8Array): boolean {
+  if (bytes.length < 4) return false;
+  // ID3v2 tag header ("ID3")
+  if (bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x33) {
+    return true;
+  }
+  // Raw MPEG frame sync (11 set bits: 0xFF followed by 0xE0..0xFF, excluding invalid 0xFF 0xFF)
+  for (let i = 0; i < Math.min(bytes.length - 1, 64); i++) {
+    if (bytes[i] === 0xff && (bytes[i + 1] & 0xe0) === 0xe0 && bytes[i + 1] !== 0xff) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function diagnoseInvalidAudioPayload(bytes: Uint8Array): string {
+  const sample = new TextDecoder('utf-8', { fatal: false }).decode(bytes.slice(0, 128)).trimStart();
+  if (/^<!doctype|^<html/i.test(sample)) {
+    return 'The audio URL returned an HTML page instead of the MP3 file. Verify public/assets/audio/colorix-theme.mp3 is deployed.';
+  }
+  if (sample.startsWith('version https://git-lfs.github.com')) {
+    return 'The deployed MP3 file is a Git LFS pointer instead of audio data. Commit the raw MP3 file directly to GitHub.';
+  }
+  return 'The deployed MP3 file could not be decoded (file data appears corrupted during upload/sync). Re-commit public/assets/audio/colorix-theme.mp3 in binary mode.';
+}
+
 export function computeEffectiveMusicVolume(
   settings: Pick<GameSettings, 'masterVolume' | 'musicVolume' | 'musicEnabled' | 'muted'>,
 ): number {
@@ -68,6 +94,7 @@ class AudioManager {
 
   // Strict singleton background music player using the exact uploaded MP3 track
   private bgmAudio: HTMLAudioElement | null = null;
+  private bgmBlobUrl: string | null = null;
   private bgmInstanceCount = 0;
   private bgmInitialized = false;
   private bgmError: string | null = null;
@@ -103,7 +130,19 @@ class AudioManager {
     if (this.bgmAudio && !this.bgmAudio.paused) {
       this.bgmAudio.pause();
     }
+    this.revokeBlobUrl();
   };
+
+  private revokeBlobUrl(): void {
+    if (this.bgmBlobUrl) {
+      try {
+        URL.revokeObjectURL(this.bgmBlobUrl);
+      } catch {
+        // Ignore revoke errors
+      }
+      this.bgmBlobUrl = null;
+    }
+  }
 
   private readonly handleBgmEndedFallback = (): void => {
     // Safety fallback for mobile browsers where native loop can occasionally pause at EOF
@@ -239,63 +278,106 @@ class AudioManager {
         return { ok: true };
       }
 
-      // Attach listeners BEFORE assigning src/load so we never miss early events or race against play()
-      const loadOutcome = await new Promise<MusicLoadResult>((resolve) => {
-        let settled = false;
-        const cleanup = () => {
-          audio.removeEventListener('loadedmetadata', onReady);
-          audio.removeEventListener('loadeddata', onReady);
-          audio.removeEventListener('canplay', onReady);
-          audio.removeEventListener('error', onError);
-          window.clearTimeout(timerId);
-        };
+      // Attach listeners BEFORE assigning src so we never miss early events or race against load()
+      const loadSourceIntoSingleton = (targetSrc: string, waitMs: number, forceAssign: boolean): Promise<MusicLoadResult> =>
+        new Promise<MusicLoadResult>((resolve) => {
+          let settled = false;
+          const cleanup = () => {
+            audio.removeEventListener('loadedmetadata', onReady);
+            audio.removeEventListener('loadeddata', onReady);
+            audio.removeEventListener('canplay', onReady);
+            audio.removeEventListener('error', onError);
+            window.clearTimeout(timerId);
+          };
 
-        const onReady = () => {
-          if (settled) return;
-          settled = true;
-          cleanup();
-          this.bgmError = null;
-          resolve({ ok: true });
-        };
+          const onReady = () => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            this.bgmError = null;
+            resolve({ ok: true });
+          };
 
-        const onError = () => {
-          if (settled) return;
-          settled = true;
-          cleanup();
-          const msg = describeMediaError(audio);
-          this.bgmError = msg;
-          resolve({ ok: false, error: msg });
-        };
+          const onError = () => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            resolve({ ok: false, error: describeMediaError(audio) });
+          };
 
-        const timerId = window.setTimeout(() => {
-          if (settled) return;
-          settled = true;
-          cleanup();
-          const msg = 'Background music took too long to buffer. You can play now or retry audio anytime.';
-          this.bgmError = msg;
-          resolve({ ok: false, error: msg });
-        }, timeoutMs);
+          const timerId = window.setTimeout(() => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            resolve({
+              ok: false,
+              error: 'Background music took too long to buffer. You can play now or retry audio anytime.',
+            });
+          }, waitMs);
 
-        audio.addEventListener('loadedmetadata', onReady, { once: true });
-        audio.addEventListener('loadeddata', onReady, { once: true });
-        audio.addEventListener('canplay', onReady, { once: true });
-        audio.addEventListener('error', onError, { once: true });
+          audio.addEventListener('loadedmetadata', onReady, { once: true });
+          audio.addEventListener('loadeddata', onReady, { once: true });
+          audio.addEventListener('canplay', onReady, { once: true });
+          audio.addEventListener('error', onError, { once: true });
 
-        const hasSrc = Boolean(audio.getAttribute('src'));
-        if (forceReload || !hasSrc || audio.error) {
-          audio.src = BGM_TRACK_URL;
-          audio.load();
-        } else if (audio.readyState >= HTMLMediaElement.HAVE_METADATA && !audio.error) {
-          onReady();
-        } else if (audio.networkState === HTMLMediaElement.NETWORK_EMPTY) {
-          audio.load();
+          const currentAttr = audio.getAttribute('src');
+          if (forceAssign || currentAttr !== targetSrc || audio.error) {
+            audio.src = targetSrc;
+            if (currentAttr === targetSrc) {
+              audio.load();
+            }
+          } else if (audio.readyState >= HTMLMediaElement.HAVE_METADATA && !audio.error) {
+            onReady();
+          } else if (audio.networkState === HTMLMediaElement.NETWORK_EMPTY) {
+            audio.load();
+          }
+        });
+
+      // Tier 1: Direct streaming via standard HTMLAudioElement URL
+      let loadOutcome = await loadSourceIntoSingleton(
+        BGM_TRACK_URL,
+        Math.min(timeoutMs, 5000),
+        forceReload || !audio.getAttribute('src'),
+      );
+
+      // Tier 2: Automatic fetch() -> validated Blob URL fallback when iframe/proxy/Range quirks block direct <audio>
+      if (!loadOutcome.ok) {
+        try {
+          const resp = await fetch(BGM_TRACK_URL, {
+            credentials: 'same-origin',
+            cache: 'force-cache',
+          });
+          if (resp.ok) {
+            const buffer = await resp.arrayBuffer();
+            const headBytes = new Uint8Array(buffer, 0, Math.min(buffer.byteLength, 256));
+            if (!isValidMp3Bytes(headBytes)) {
+              const diag = diagnoseInvalidAudioPayload(headBytes);
+              this.bgmError = diag;
+              return { ok: false, error: diag };
+            }
+            this.revokeBlobUrl();
+            const blob = new Blob([buffer], { type: 'audio/mpeg' });
+            const blobUrl = URL.createObjectURL(blob);
+            this.bgmBlobUrl = blobUrl;
+            loadOutcome = await loadSourceIntoSingleton(blobUrl, Math.min(timeoutMs, 5000), true);
+          } else {
+            loadOutcome = { ok: false, error: `Background music file returned HTTP ${resp.status}.` };
+          }
+        } catch {
+          // Keep Tier 1 error if fallback fetch also fails
         }
-      });
+      }
 
-      if (loadOutcome.ok && this.settings.musicEnabled && audio.paused) {
+      if (!loadOutcome.ok) {
+        this.bgmError = loadOutcome.error || 'Background music could not be loaded.';
+        return loadOutcome;
+      }
+
+      this.bgmError = null;
+      if (this.settings.musicEnabled && audio.paused) {
         this.tryPlayBgm();
       }
-      return loadOutcome;
+      return { ok: true };
     };
 
     const promise = run().finally(() => {
