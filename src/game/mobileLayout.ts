@@ -233,3 +233,118 @@ export function resolveDirectionalPadInput(
   }
   return { left: false, right: false };
 }
+
+export type MoveDirection = 'left' | 'right';
+
+export interface DirectionalHoldState {
+  leftTokens: readonly string[];
+  rightTokens: readonly string[];
+  lastPressed: MoveDirection | null;
+}
+
+export interface DirectionalHoldOutput {
+  left: boolean;
+  right: boolean;
+  activeDir: MoveDirection | null;
+}
+
+export function createDirectionalHoldState(): DirectionalHoldState {
+  return {
+    leftTokens: [],
+    rightTokens: [],
+    lastPressed: null,
+  };
+}
+
+/**
+ * Registers an active pointer or touch hold on the Left or Right mobile button.
+ * Guarantees deterministic single-direction precedence if both buttons are touched simultaneously.
+ */
+export function pressDirectionalHold(
+  state: DirectionalHoldState,
+  direction: MoveDirection,
+  token: string,
+): DirectionalHoldState {
+  const leftTokens =
+    direction === 'left'
+      ? state.leftTokens.includes(token)
+        ? state.leftTokens
+        : [...state.leftTokens, token]
+      : state.leftTokens.filter((t) => t !== token);
+
+  const rightTokens =
+    direction === 'right'
+      ? state.rightTokens.includes(token)
+        ? state.rightTokens
+        : [...state.rightTokens, token]
+      : state.rightTokens.filter((t) => t !== token);
+
+  return {
+    leftTokens,
+    rightTokens,
+    lastPressed: direction,
+  };
+}
+
+/**
+ * Releases a specific pointer/touch token from whichever directional button owns it.
+ */
+export function releaseDirectionalHoldToken(
+  state: DirectionalHoldState,
+  token: string,
+): DirectionalHoldState {
+  const hasInLeft = state.leftTokens.includes(token);
+  const hasInRight = state.rightTokens.includes(token);
+  if (!hasInLeft && !hasInRight) {
+    return state;
+  }
+
+  const leftTokens = hasInLeft ? state.leftTokens.filter((t) => t !== token) : state.leftTokens;
+  const rightTokens = hasInRight ? state.rightTokens.filter((t) => t !== token) : state.rightTokens;
+
+  let lastPressed: MoveDirection | null = state.lastPressed;
+  if (leftTokens.length === 0 && rightTokens.length === 0) {
+    lastPressed = null;
+  } else if (leftTokens.length > 0 && rightTokens.length === 0) {
+    lastPressed = 'left';
+  } else if (rightTokens.length > 0 && leftTokens.length === 0) {
+    lastPressed = 'right';
+  }
+
+  return {
+    leftTokens,
+    rightTokens,
+    lastPressed,
+  };
+}
+
+/**
+ * Clears all active holds (used on touchcancel, blur, visibilitychange, or HUD hide).
+ */
+export function clearDirectionalHold(): DirectionalHoldState {
+  return createDirectionalHoldState();
+}
+
+/**
+ * Resolves the engine movement flags from the active hold tokens.
+ * Guarantees left and right are NEVER simultaneously true.
+ */
+export function getDirectionalHoldOutput(state: DirectionalHoldState): DirectionalHoldOutput {
+  const hasLeft = state.leftTokens.length > 0;
+  const hasRight = state.rightTokens.length > 0;
+
+  if (!hasLeft && !hasRight) {
+    return { left: false, right: false, activeDir: null };
+  }
+  if (hasLeft && !hasRight) {
+    return { left: true, right: false, activeDir: 'left' };
+  }
+  if (!hasLeft && hasRight) {
+    return { left: false, right: true, activeDir: 'right' };
+  }
+  if (state.lastPressed === 'left') {
+    return { left: true, right: false, activeDir: 'left' };
+  }
+  return { left: false, right: true, activeDir: 'right' };
+}
+

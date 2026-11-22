@@ -517,6 +517,24 @@ export default function App() {
     }
   }, [markTaskStatus]);
 
+  // Stable mobile touch control callbacks so HUD timer/cooldown ticks never interrupt held movement
+  const handleTouchLeft = useCallback((down: boolean) => {
+    engineRef.current?.setTouchInput({ left: down });
+  }, []);
+
+  const handleTouchRight = useCallback((down: boolean) => {
+    engineRef.current?.setTouchInput({ right: down });
+  }, []);
+
+  const handleTouchJumpDown = useCallback(() => {
+    audioManager.unlock();
+    engineRef.current?.triggerTouchJump();
+  }, []);
+
+  const handleTouchJumpUp = useCallback(() => {
+    engineRef.current?.releaseTouchJump();
+  }, []);
+
   // Title-to-Start Keyboard Handshake (Enter / Space starts immediately once loading completes)
   useEffect(() => {
     const onTitleKey = (e: KeyboardEvent) => {
@@ -637,13 +655,10 @@ export default function App() {
             engineRef.current?.restartLevel();
           }}
           onPause={togglePause}
-          onTouchLeft={(down) => engineRef.current?.setTouchInput({ left: down })}
-          onTouchRight={(down) => engineRef.current?.setTouchInput({ right: down })}
-          onTouchJumpDown={() => {
-            audioManager.unlock();
-            engineRef.current?.triggerTouchJump();
-          }}
-          onTouchJumpUp={() => engineRef.current?.releaseTouchJump()}
+          onTouchLeft={handleTouchLeft}
+          onTouchRight={handleTouchRight}
+          onTouchJumpDown={handleTouchJumpDown}
+          onTouchJumpUp={handleTouchJumpUp}
         />
       )}
 

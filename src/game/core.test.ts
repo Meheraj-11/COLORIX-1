@@ -16,8 +16,13 @@ import {
   MIN_LOADING_DISPLAY_MS,
 } from './loader';
 import {
+  clearDirectionalHold,
   computeCameraFraming,
   computeMobileViewportProfile,
+  createDirectionalHoldState,
+  getDirectionalHoldOutput,
+  pressDirectionalHold,
+  releaseDirectionalHoldToken,
   resolveDirectionalPadInput,
 } from './mobileLayout';
 import {
@@ -594,6 +599,43 @@ test('directional touch pad prevents simultaneous left+right and enforces center
   assert.deepEqual(resolveDirectionalPadInput(115, 140), { left: false, right: true });
   assert.deepEqual(resolveDirectionalPadInput(0, 0), { left: false, right: false });
 });
+
+test('mobile directional hold state machine supports continuous hold, immediate release, clean reversal, and interrupt clear', () => {
+  let state = createDirectionalHoldState();
+  assert.deepEqual(getDirectionalHoldOutput(state), { left: false, right: false, activeDir: null });
+
+  // 1. Hold LEFT continuously -> left stays true until matching token releases
+  state = pressDirectionalHold(state, 'left', 'p:1');
+  assert.deepEqual(getDirectionalHoldOutput(state), { left: true, right: false, activeDir: 'left' });
+
+  // Unrelated pointer (e.g. JUMP thumb p:2) ending must NOT cancel held LEFT movement
+  state = releaseDirectionalHoldToken(state, 'p:2');
+  assert.deepEqual(getDirectionalHoldOutput(state), { left: true, right: false, activeDir: 'left' });
+
+  // Releasing LEFT stops movement immediately
+  state = releaseDirectionalHoldToken(state, 'p:1');
+  assert.deepEqual(getDirectionalHoldOutput(state), { left: false, right: false, activeDir: null });
+
+  // 2. Hold RIGHT continuously -> right stays true, immediate stop on release
+  state = pressDirectionalHold(state, 'right', 'p:3');
+  assert.deepEqual(getDirectionalHoldOutput(state), { left: false, right: true, activeDir: 'right' });
+  state = releaseDirectionalHoldToken(state, 'p:3');
+  assert.deepEqual(getDirectionalHoldOutput(state), { left: false, right: false, activeDir: null });
+
+  // 3. Overlapping direction switch (hold LEFT p:4, then press RIGHT p:5) -> newest wins, NEVER both true
+  state = pressDirectionalHold(state, 'left', 'p:4');
+  state = pressDirectionalHold(state, 'right', 'p:5');
+  assert.deepEqual(getDirectionalHoldOutput(state), { left: false, right: true, activeDir: 'right' });
+
+  // Lifting RIGHT while LEFT is still held cleanly falls back to LEFT
+  state = releaseDirectionalHoldToken(state, 'p:5');
+  assert.deepEqual(getDirectionalHoldOutput(state), { left: true, right: false, activeDir: 'left' });
+
+  // 4. Interrupted touch / blur / HUD hide clears all holds immediately with zero stuck movement
+  state = clearDirectionalHold();
+  assert.deepEqual(getDirectionalHoldOutput(state), { left: false, right: false, activeDir: null });
+});
+
 
 
 
