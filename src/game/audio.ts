@@ -78,6 +78,16 @@ export function diagnoseInvalidAudioPayload(bytes: Uint8Array): string {
   return 'The deployed MP3 file could not be decoded (file data appears corrupted during upload/sync). Re-commit public/assets/audio/colorix-theme.mp3 in binary mode.';
 }
 
+export function decodeBase64ToUint8Array(base64: string): Uint8Array {
+  const binary = atob(base64);
+  const len = binary.length;
+  const out = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    out[i] = binary.charCodeAt(i);
+  }
+  return out;
+}
+
 export function computeEffectiveMusicVolume(
   settings: Pick<GameSettings, 'masterVolume' | 'musicVolume' | 'musicEnabled' | 'muted'>,
 ): number {
@@ -230,36 +240,6 @@ class AudioManager {
         this.bindInteractionListeners();
       }
 
-      // 1. Fast reachability check on the exact deployed MP3 URL (with 1-byte Range fallback if HEAD returns 405)
-      let probeResponse: Response;
-      try {
-        probeResponse = await fetch(BGM_TRACK_URL, { method: 'HEAD', cache: 'no-store' });
-        if (probeResponse.status === 405) {
-          probeResponse = await fetch(BGM_TRACK_URL, {
-            method: 'GET',
-            headers: { Range: 'bytes=0-0' },
-            cache: 'no-store',
-          });
-        }
-      } catch {
-        const msg = `Could not reach the background music file (${BGM_TRACK_URL}).`;
-        this.bgmError = msg;
-        return { ok: false, error: msg };
-      }
-
-      if (!probeResponse.ok) {
-        const msg = `Background music file returned HTTP ${probeResponse.status}.`;
-        this.bgmError = msg;
-        return { ok: false, error: msg };
-      }
-
-      const contentType = (probeResponse.headers.get('content-type') || '').toLowerCase();
-      if (contentType.includes('text/html')) {
-        const msg = `Background music URL (${BGM_TRACK_URL}) returned HTML instead of MP3 audio. Ensure public/assets/audio/colorix-theme.mp3 is committed and deployed.`;
-        this.bgmError = msg;
-        return { ok: false, error: msg };
-      }
-
       const audio = this.ensureBgmElement();
       if (!audio) {
         const msg = 'Browser audio playback is unavailable in this environment.';
@@ -278,8 +258,12 @@ class AudioManager {
         return { ok: true };
       }
 
-      // Attach listeners BEFORE assigning src so we never miss early events or race against load()
-      const loadSourceIntoSingleton = (targetSrc: string, waitMs: number, forceAssign: boolean): Promise<MusicLoadResult> =>
+      // Helper: load any URL (direct or blob:) into the strict singleton HTMLAudioElement
+      const loadSourceIntoSingleton = (
+        targetSrc: string,
+        waitMs: number,
+        forceAssign: boolean,
+      ): Promise<MusicLoadResult> =>
         new Promise<MusicLoadResult>((resolve) => {
           let settled = false;
           const cleanup = () => {
@@ -333,15 +317,43 @@ class AudioManager {
           }
         });
 
-      // Tier 1: Direct streaming via standard HTMLAudioElement URL
-      let loadOutcome = await loadSourceIntoSingleton(
-        BGM_TRACK_URL,
-        Math.min(timeoutMs, 5000),
-        forceReload || !audio.getAttribute('src'),
-      );
+      // 1. Fast reachability probe on the deployed static MP3 URL
+      let staticAssetReachable = false;
+      let lastError = `Could not reach the background music file (${BGM_TRACK_URL}).`;
+      try {
+        let probeResponse = await fetch(BGM_TRACK_URL, { method: 'HEAD', cache: 'no-store' });
+        if (probeResponse.status === 405) {
+          probeResponse = await fetch(BGM_TRACK_URL, {
+            method: 'GET',
+            headers: { Range: 'bytes=0-0' },
+            cache: 'no-store',
+          });
+        }
+        const contentType = (probeResponse.headers.get('content-type') || '').toLowerCase();
+        if (probeResponse.ok && !contentType.includes('text/html')) {
+          staticAssetReachable = true;
+        } else if (!probeResponse.ok) {
+          lastError = `Background music file returned HTTP ${probeResponse.status}.`;
+        } else {
+          lastError = `Background music URL (${BGM_TRACK_URL}) returned HTML instead of MP3 audio.`;
+        }
+      } catch {
+        lastError = `Could not reach the background music file (${BGM_TRACK_URL}).`;
+      }
+
+      let loadOutcome: MusicLoadResult = { ok: false, error: lastError };
+
+      // Tier 1: Direct streaming via standard HTMLAudioElement URL (zero extra bundle download)
+      if (staticAssetReachable) {
+        loadOutcome = await loadSourceIntoSingleton(
+          BGM_TRACK_URL,
+          Math.min(timeoutMs, 5000),
+          forceReload || !audio.getAttribute('src'),
+        );
+      }
 
       // Tier 2: Automatic fetch() -> validated Blob URL fallback when iframe/proxy/Range quirks block direct <audio>
-      if (!loadOutcome.ok) {
+      if (!loadOutcome.ok && staticAssetReachable) {
         try {
           const resp = await fetch(BGM_TRACK_URL, {
             credentials: 'same-origin',
@@ -350,27 +362,43 @@ class AudioManager {
           if (resp.ok) {
             const buffer = await resp.arrayBuffer();
             const headBytes = new Uint8Array(buffer, 0, Math.min(buffer.byteLength, 256));
-            if (!isValidMp3Bytes(headBytes)) {
-              const diag = diagnoseInvalidAudioPayload(headBytes);
-              this.bgmError = diag;
-              return { ok: false, error: diag };
+            if (isValidMp3Bytes(headBytes)) {
+              this.revokeBlobUrl();
+              const blob = new Blob([buffer], { type: 'audio/mpeg' });
+              const blobUrl = URL.createObjectURL(blob);
+              this.bgmBlobUrl = blobUrl;
+              loadOutcome = await loadSourceIntoSingleton(blobUrl, Math.min(timeoutMs, 5000), true);
+            } else {
+              loadOutcome = { ok: false, error: diagnoseInvalidAudioPayload(headBytes) };
             }
-            this.revokeBlobUrl();
-            const blob = new Blob([buffer], { type: 'audio/mpeg' });
-            const blobUrl = URL.createObjectURL(blob);
-            this.bgmBlobUrl = blobUrl;
-            loadOutcome = await loadSourceIntoSingleton(blobUrl, Math.min(timeoutMs, 5000), true);
           } else {
             loadOutcome = { ok: false, error: `Background music file returned HTTP ${resp.status}.` };
           }
         } catch {
-          // Keep Tier 1 error if fallback fetch also fails
+          // Proceed cleanly to Tier 3 bundled fallback
+        }
+      }
+
+      // Tier 3: Lazy-loaded bundled copy of the exact uploaded MP3 (immune to GitHub/Vercel binary omission or 404s)
+      if (!loadOutcome.ok) {
+        try {
+          const { COLORIX_THEME_MP3_BASE64 } = await import('./colorixThemeData');
+          const bytes = decodeBase64ToUint8Array(COLORIX_THEME_MP3_BASE64);
+          if (isValidMp3Bytes(bytes)) {
+            this.revokeBlobUrl();
+            const blob = new Blob([bytes.buffer as ArrayBuffer], { type: 'audio/mpeg' });
+            const blobUrl = URL.createObjectURL(blob);
+            this.bgmBlobUrl = blobUrl;
+            loadOutcome = await loadSourceIntoSingleton(blobUrl, Math.min(timeoutMs, 6000), true);
+          }
+        } catch {
+          // Keep last diagnostic error if bundled fallback also cannot load
         }
       }
 
       if (!loadOutcome.ok) {
-        this.bgmError = loadOutcome.error || 'Background music could not be loaded.';
-        return loadOutcome;
+        this.bgmError = loadOutcome.error || lastError;
+        return { ok: false, error: this.bgmError };
       }
 
       this.bgmError = null;
