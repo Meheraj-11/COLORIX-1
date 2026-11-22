@@ -63,14 +63,14 @@ export function ColorWheel({
 
   return (
     <div
-      className="fixed inset-0 z-40 flex items-center justify-center bg-[#06080E]/65 pointer-events-auto"
+      className="fixed inset-0 z-40 flex items-center justify-center bg-[#06080E]/68 p-3 pointer-events-auto"
       onClick={onClose}
       role="dialog"
       aria-modal="true"
       aria-label={titleLabel}
     >
       <div
-        className="relative flex flex-col items-center gap-3 p-5 rounded-2xl bg-[#0D111C]/96 border border-white/15 shadow-2xl"
+        className="relative flex flex-col items-center gap-3 p-4 sm:p-5 rounded-2xl bg-[#0D111C]/96 border border-white/15 shadow-2xl max-w-[96vw] max-h-[92dvh] overflow-y-auto colorix-scroll"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between w-full px-1">
@@ -87,12 +87,13 @@ export function ColorWheel({
           </button>
         </div>
 
-        <div className="relative" style={{ width: size, height: size }}>
-          <svg
-            viewBox={`0 0 ${size} ${size}`}
-            className="w-full h-full select-none"
-            aria-label="16-Color Radial Selector"
-          >
+        <div className="flex flex-col [@media(max-height:500px)_and_(min-width:560px)]:flex-row items-center gap-3">
+          <div className="relative w-[min(280px,78vw,58dvh)] h-[min(280px,78vw,58dvh)] min-[900px]:w-[328px] min-[900px]:h-[328px] shrink-0">
+            <svg
+              viewBox={`0 0 ${size} ${size}`}
+              className="w-full h-full select-none"
+              aria-label="16-Color Radial Selector"
+            >
             {/* Outer dark obsidian bezel */}
             <circle cx={cx} cy={cy} r={154} fill="#090C14" stroke="rgba(255,255,255,0.14)" strokeWidth="1.5" />
 
@@ -242,6 +243,7 @@ export function ColorWheel({
               </button>
             );
           })}
+          </div>
         </div>
       </div>
     </div>

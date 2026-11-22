@@ -20,6 +20,7 @@ const POOL_SIZE = 180;
 export class ParticlePool {
   private pool: Particle[] = [];
   private cursor = 0;
+  private emitScale = 1;
 
   constructor() {
     for (let i = 0; i < POOL_SIZE; i++) {
@@ -38,6 +39,10 @@ export class ParticlePool {
         shape: 'circle',
       });
     }
+  }
+
+  public setEmitScale(scale: number): void {
+    this.emitScale = Math.max(0.4, Math.min(1, scale));
   }
 
   public clear(): void {
@@ -64,6 +69,7 @@ export class ParticlePool {
       shape?: 'circle' | 'diamond' | 'ring';
     },
   ): void {
+    const scaledCount = Math.max(1, Math.round(count * this.emitScale));
     const sMin = opts?.speedMin ?? 40;
     const sMax = opts?.speedMax ?? 160;
     const szMin = opts?.sizeMin ?? 2.5;
@@ -75,7 +81,7 @@ export class ParticlePool {
     const aMax = opts?.angleMax ?? Math.PI * 2;
     const shape = opts?.shape ?? 'circle';
 
-    for (let i = 0; i < count; i++) {
+    for (let i = 0; i < scaledCount; i++) {
       const p = this.pool[this.cursor];
       this.cursor = (this.cursor + 1) % POOL_SIZE;
       const angle = aMin + Math.random() * (aMax - aMin);
@@ -130,10 +136,11 @@ export class ParticlePool {
     }
   }
 
-  public render(g: Phaser.GameObjects.Graphics): void {
+  public render(g: Phaser.GameObjects.Graphics, cullMinX = -Infinity, cullMaxX = Infinity): void {
     for (let i = 0; i < POOL_SIZE; i++) {
       const p = this.pool[i];
       if (!p.active) continue;
+      if (p.x + p.size < cullMinX || p.x - p.size > cullMaxX) continue;
       if (p.shape === 'ring') {
         const progress = 1 - p.life / p.maxLife;
         const radius = 8 + p.size * progress;

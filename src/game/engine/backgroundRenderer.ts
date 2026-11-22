@@ -16,6 +16,12 @@ const MAX_MOTES = 46;
 
 export class BackgroundRenderer {
   private motes: AmbientMote[] = [];
+  // Pre-allocated scratch RGB tuples to avoid per-frame GC allocations on mobile
+  private topRgb: [number, number, number] = [0, 0, 0];
+  private midRgb: [number, number, number] = [0, 0, 0];
+  private botRgb: [number, number, number] = [0, 0, 0];
+  private bandRgb: [number, number, number] = [0, 0, 0];
+  private layerRgb: [number, number, number] = [0, 0, 0];
 
   constructor() {
     for (let i = 0; i < MAX_MOTES; i++) {
@@ -31,11 +37,12 @@ export class BackgroundRenderer {
     }
   }
 
-  public update(dt: number, viewW: number, viewH: number, theme: WorldDef['theme']): void {
-    const w = Math.max(800, viewW);
-    const h = Math.max(500, viewH);
+  public update(dt: number, viewW: number, viewH: number, theme: WorldDef['theme'], activeRatio = 1): void {
+    const w = Math.max(320, viewW);
+    const h = Math.max(320, viewH);
     const dirY = theme === 'frozen' ? 1 : -1;
-    for (let i = 0; i < this.motes.length; i++) {
+    const count = Math.max(8, Math.min(this.motes.length, Math.round(this.motes.length * activeRatio)));
+    for (let i = 0; i < count; i++) {
       const m = this.motes[i];
       m.phase += dt * 1.4;
       m.x += (m.speedX + Math.sin(m.phase) * 8) * dt;
@@ -57,59 +64,76 @@ export class BackgroundRenderer {
     world: WorldDef,
     timeSec: number,
     quality: GraphicsQuality,
+    opts?: { bands?: number; moteRatio?: number; drawLightShafts?: boolean; highFidelity?: boolean },
   ): void {
     g.clear();
 
     // 1. Atmospheric Sky Gradient (Canvas & WebGL compatible multi-band vertical gradient)
-    const bands = 14;
-    const topRgb: [number, number, number] = [
-      Math.max(6, Math.round(bgRgb[0] * 0.54)),
-      Math.max(8, Math.round(bgRgb[1] * 0.54)),
-      Math.max(14, Math.round(bgRgb[2] * 0.62)),
-    ];
-    const midRgb: [number, number, number] = [
-      Math.min(255, Math.round(bgRgb[0] * 0.98)),
-      Math.min(255, Math.round(bgRgb[1] * 0.98)),
-      Math.min(255, Math.round(bgRgb[2] * 0.98)),
-    ];
-    const botRgb: [number, number, number] = [
-      Math.min(255, Math.round(bgRgb[0] * 1.16 + 14)),
-      Math.min(255, Math.round(bgRgb[1] * 1.16 + 14)),
-      Math.min(255, Math.round(bgRgb[2] * 1.16 + 18)),
-    ];
+    const bands = opts?.bands ?? 14;
+    const highFidelity = Boolean(opts?.highFidelity);
+    const topRgb = this.topRgb;
+    topRgb[0] = Math.max(6, Math.round(bgRgb[0] * 0.54));
+    topRgb[1] = Math.max(8, Math.round(bgRgb[1] * 0.54));
+    topRgb[2] = Math.max(14, Math.round(bgRgb[2] * 0.62));
 
-    const bandH = Math.ceil(viewH / bands) + 1;
+    const midRgb = this.midRgb;
+    midRgb[0] = Math.min(255, Math.round(bgRgb[0] * 0.98));
+    midRgb[1] = Math.min(255, Math.round(bgRgb[1] * 0.98));
+    midRgb[2] = Math.min(255, Math.round(bgRgb[2] * 0.98));
+
+    const botRgb = this.botRgb;
+    botRgb[0] = Math.min(255, Math.round(bgRgb[0] * 1.16 + 14));
+    botRgb[1] = Math.min(255, Math.round(bgRgb[1] * 1.16 + 14));
+    botRgb[2] = Math.min(255, Math.round(bgRgb[2] * 1.16 + 18));
+
+    const bandRgb = this.bandRgb;
+    const bandStep = viewH / bands;
+    const bandH = Math.ceil(bandStep) + 1;
     for (let i = 0; i < bands; i++) {
       const t = i / (bands - 1);
-      const rgb: [number, number, number] =
-        t < 0.55
-          ? [
-              Math.round(topRgb[0] + (midRgb[0] - topRgb[0]) * (t / 0.55)),
-              Math.round(topRgb[1] + (midRgb[1] - topRgb[1]) * (t / 0.55)),
-              Math.round(topRgb[2] + (midRgb[2] - topRgb[2]) * (t / 0.55)),
-            ]
-          : [
-              Math.round(midRgb[0] + (botRgb[0] - midRgb[0]) * ((t - 0.55) / 0.45)),
-              Math.round(midRgb[1] + (botRgb[1] - midRgb[1]) * ((t - 0.55) / 0.45)),
-              Math.round(midRgb[2] + (botRgb[2] - midRgb[2]) * ((t - 0.55) / 0.45)),
-            ];
-      g.fillStyle(rgbToHexNum(rgb), 1);
-      g.fillRect(0, i * (viewH / bands), viewW, bandH);
+      if (t < 0.55) {
+        const k = t / 0.55;
+        bandRgb[0] = Math.round(topRgb[0] + (midRgb[0] - topRgb[0]) * k);
+        bandRgb[1] = Math.round(topRgb[1] + (midRgb[1] - topRgb[1]) * k);
+        bandRgb[2] = Math.round(topRgb[2] + (midRgb[2] - topRgb[2]) * k);
+      } else {
+        const k = (t - 0.55) / 0.45;
+        bandRgb[0] = Math.round(midRgb[0] + (botRgb[0] - midRgb[0]) * k);
+        bandRgb[1] = Math.round(midRgb[1] + (botRgb[1] - midRgb[1]) * k);
+        bandRgb[2] = Math.round(midRgb[2] + (botRgb[2] - midRgb[2]) * k);
+      }
+      g.fillStyle(rgbToHexNum(bandRgb), 1);
+      g.fillRect(0, i * bandStep, viewW, bandH);
+    }
+
+    // Desktop-only subtle horizon atmospheric glow for richer depth on wide PC/Laptop screens
+    if (highFidelity) {
+      g.fillStyle(0xffffff, 0.028);
+      g.fillRect(0, viewH * 0.64, viewW, viewH * 0.18);
+      g.fillStyle(0xffffff, 0.022);
+      g.fillRect(0, viewH * 0.72, viewW, viewH * 0.14);
     }
 
     // 2. Subtle Atmospheric Light Shafts / Celestial Prism Halo (medium & high quality)
-    if (quality !== 'low') {
+    const showShafts = opts?.drawLightShafts ?? quality !== 'low';
+    if (showShafts) {
       const sunX = viewW * 0.72 - ((camX * 0.03) % 240);
       const sunY = viewH * 0.24;
+      const haloR = Math.min(viewW, viewH) * 0.24;
       g.fillStyle(0xffffff, 0.05);
-      g.fillCircle(sunX, sunY, Math.min(viewW, viewH) * 0.24);
+      g.fillCircle(sunX, sunY, haloR);
       g.fillStyle(0xffffff, 0.07);
       g.fillCircle(sunX, sunY, Math.min(viewW, viewH) * 0.11);
+      if (highFidelity) {
+        g.lineStyle(1, 0xffffff, 0.08);
+        g.strokeCircle(sunX, sunY, haloR * 0.68);
+      }
 
-      // Diagonal light shafts
+      // Diagonal light shafts (cull shafts outside current viewport)
       g.fillStyle(0xffffff, 0.035);
       for (let i = 0; i < 3; i++) {
         const sx = ((i * 420 - camX * 0.06) % (viewW + 420)) - 120;
+        if (sx - 210 > viewW || sx + 95 < 0) continue;
         g.beginPath();
         g.moveTo(sx, 0);
         g.lineTo(sx + 95, 0);
@@ -121,11 +145,11 @@ export class BackgroundRenderer {
     }
 
     // 3. Far Parallax Silhouette Layer (0.12x camera scroll)
-    const farColor = rgbToHexNum([
-      Math.max(4, Math.round(bgRgb[0] * 0.34)),
-      Math.max(5, Math.round(bgRgb[1] * 0.34)),
-      Math.max(10, Math.round(bgRgb[2] * 0.4)),
-    ]);
+    const layerRgb = this.layerRgb;
+    layerRgb[0] = Math.max(4, Math.round(bgRgb[0] * 0.34));
+    layerRgb[1] = Math.max(5, Math.round(bgRgb[1] * 0.34));
+    layerRgb[2] = Math.max(10, Math.round(bgRgb[2] * 0.4));
+    const farColor = rgbToHexNum(layerRgb);
     const farOffset = -(camX * 0.12);
     const baseY = viewH - Math.min(80, camY * 0.05);
 
@@ -152,19 +176,21 @@ export class BackgroundRenderer {
     }
 
     // 4. Mid Parallax Architectural Layer (0.28x camera scroll)
-    const midColor = rgbToHexNum([
-      Math.max(4, Math.round(bgRgb[0] * 0.2)),
-      Math.max(5, Math.round(bgRgb[1] * 0.2)),
-      Math.max(9, Math.round(bgRgb[2] * 0.25)),
-    ]);
+    layerRgb[0] = Math.max(4, Math.round(bgRgb[0] * 0.2));
+    layerRgb[1] = Math.max(5, Math.round(bgRgb[1] * 0.2));
+    layerRgb[2] = Math.max(9, Math.round(bgRgb[2] * 0.25));
+    const midColor = rgbToHexNum(layerRgb);
     const midOffset = -(camX * 0.28);
     g.fillStyle(midColor, 0.92);
     this.drawMidArchitecture(g, viewW, viewH, midOffset, world.theme, timeSec);
 
-    // 5. Atmospheric Drifting Motes (count scaled by Graphics Quality)
-    const moteCount = quality === 'low' ? 10 : quality === 'medium' ? 24 : MAX_MOTES;
+    // 5. Atmospheric Drifting Motes (count scaled by Graphics Quality & mobile profile)
+    const baseMoteCount = quality === 'low' ? 10 : quality === 'medium' ? 24 : MAX_MOTES;
+    const moteRatio = opts?.moteRatio ?? 1;
+    const moteCount = Math.max(6, Math.min(MAX_MOTES, Math.round(baseMoteCount * moteRatio)));
     for (let i = 0; i < moteCount; i++) {
       const m = this.motes[i];
+      if (m.x < -10 || m.x > viewW + 10 || m.y < -10 || m.y > viewH + 10) continue;
       const pulse = 0.65 + 0.35 * Math.sin(m.phase * 1.5);
       g.fillStyle(0xffffff, m.alpha * pulse);
       g.fillCircle(m.x, m.y, m.r);

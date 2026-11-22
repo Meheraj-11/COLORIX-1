@@ -574,7 +574,9 @@ export function LoadingScreen({
     let rafId = 0;
     let width = window.innerWidth;
     let height = window.innerHeight;
-    let dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+    const lowEnd = typeof navigator !== 'undefined' && (navigator.hardwareConcurrency ?? 6) <= 4;
+    const maxLoadingDpr = lowEnd ? 1.5 : 2;
+    let dpr = Math.min(window.devicePixelRatio || 1, maxLoadingDpr);
 
     // Offscreen cache for static space sky, cosmic nebulae, glossy floor & vertical color reflections
     const backdropCanvas = document.createElement('canvas');
@@ -671,7 +673,7 @@ export function LoadingScreen({
     const resize = () => {
       width = window.innerWidth;
       height = window.innerHeight;
-      dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+      dpr = Math.min(window.devicePixelRatio || 1, maxLoadingDpr);
       canvas.width = Math.max(1, Math.floor(width * dpr));
       canvas.height = Math.max(1, Math.floor(height * dpr));
       canvas.style.width = `${width}px`;

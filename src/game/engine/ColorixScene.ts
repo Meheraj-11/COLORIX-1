@@ -25,6 +25,11 @@ import {
   type AABB,
   type LightSegment,
 } from '../rules';
+import {
+  computeCameraFraming,
+  computeMobileViewportProfile,
+  type MobileViewportProfile,
+} from '../mobileLayout';
 import type {
   GameSettings,
   HudSnapshot,
@@ -293,11 +298,25 @@ export class ColorixScene extends Phaser.Scene {
   private lastHudBroadcastSec = -1;
   private timeSec = 0;
 
-  // Smooth Camera State
+  // Smooth Camera & Mobile Viewport State
   private camX = 0;
   private camY = 0;
   private titleDriftIndex = 0;
   private titleDriftTimer = 0;
+  private logicalW = 1280;
+  private logicalH = 720;
+  private viewportProfile: MobileViewportProfile = computeMobileViewportProfile({
+    width: 1280,
+    height: 720,
+    devicePixelRatio: 1,
+    isTouchDevice: false,
+    graphicsQuality: 'high',
+  });
+
+  // Reusable scratch buffers to eliminate per-frame GC allocations on mobile
+  private solidScratch: AABB[] = [];
+  private beamBlockerScratch: AABB[] = [];
+  private playerRectScratch: AABB = { x: 0, y: 0, w: PLAYER_W, h: PLAYER_H };
 
   // Unified Keyboard + Touch Inputs
   private keysHeld = new Set<string>();
@@ -320,6 +339,13 @@ export class ColorixScene extends Phaser.Scene {
 
   public setCallbacks(callbacks: EngineCallbacks): void {
     this.callbacks = callbacks;
+  }
+
+  public setViewportMetrics(cssW: number, cssH: number, profile: MobileViewportProfile): void {
+    this.logicalW = Math.max(240, cssW);
+    this.logicalH = Math.max(240, cssH);
+    this.viewportProfile = profile;
+    this.particles.setEmitScale(profile.particleScale);
   }
 
   public create(): void {
@@ -514,7 +540,7 @@ export class ColorixScene extends Phaser.Scene {
     this.currentBgRgb = [...this.targetBgRgb];
     this.camX = 0;
     this.camY = 0;
-    this.cameras.main.setZoom(1);
+    this.cameras.main.setZoom(this.viewportProfile.renderScale);
     this.px = 455;
     this.py = 600 - PLAYER_H;
     this.facing = 1;
@@ -736,32 +762,55 @@ export class ColorixScene extends Phaser.Scene {
   }
 
   private getPlayerRect(): AABB {
-    return { x: this.px, y: this.py, w: PLAYER_W, h: PLAYER_H };
+    this.playerRectScratch.x = this.px;
+    this.playerRectScratch.y = this.py;
+    this.playerRectScratch.w = PLAYER_W;
+    this.playerRectScratch.h = PLAYER_H;
+    return this.playerRectScratch;
+  }
+
+  private pushScratchRect(pool: AABB[], index: number, x: number, y: number, w: number, h: number): number {
+    if (index < pool.length) {
+      const r = pool[index];
+      r.x = x;
+      r.y = y;
+      r.w = w;
+      r.h = h;
+    } else {
+      pool.push({ x, y, w, h });
+    }
+    return index + 1;
   }
 
   private getAllSolidRects(excludeId?: string): AABB[] {
-    const list: AABB[] = [];
-    for (const p of this.platforms) {
+    let count = 0;
+    const pool = this.solidScratch;
+    for (let i = 0; i < this.platforms.length; i++) {
+      const p = this.platforms[i];
       if (p.solid && !p.phasedGrace && p.id !== excludeId) {
-        list.push({ x: p.x, y: p.y, w: p.w, h: p.h });
+        count = this.pushScratchRect(pool, count, p.x, p.y, p.w, p.h);
       }
     }
-    for (const mp of this.movingPlatforms) {
+    for (let i = 0; i < this.movingPlatforms.length; i++) {
+      const mp = this.movingPlatforms[i];
       if (mp.solid && !mp.phasedGrace && mp.id !== excludeId) {
-        list.push({ x: mp.x, y: mp.y, w: mp.w, h: mp.h });
+        count = this.pushScratchRect(pool, count, mp.x, mp.y, mp.w, mp.h);
       }
     }
-    for (const mb of this.magneticBlocks) {
+    for (let i = 0; i < this.magneticBlocks.length; i++) {
+      const mb = this.magneticBlocks[i];
       if (mb.solid && !mb.phasedGrace && mb.id !== excludeId) {
-        list.push({ x: mb.x, y: mb.y, w: mb.w, h: mb.h });
+        count = this.pushScratchRect(pool, count, mb.x, mb.y, mb.w, mb.h);
       }
     }
-    for (const g of this.gates) {
+    for (let i = 0; i < this.gates.length; i++) {
+      const g = this.gates[i];
       if (!g.unlocked && g.openProgress < 0.7 && g.id !== excludeId) {
-        list.push({ x: g.x, y: g.y, w: g.w, h: g.h * (1 - g.openProgress) });
+        count = this.pushScratchRect(pool, count, g.x, g.y, g.w, g.h * (1 - g.openProgress));
       }
     }
-    return list;
+    pool.length = count;
+    return pool;
   }
 
   private evaluateAllColorStates(instant: boolean): void {
@@ -872,17 +921,22 @@ export class ColorixScene extends Phaser.Scene {
       this.lightSegments = [];
       return;
     }
-    // Light beams are blocked by currently solid platforms, moving platforms, magnetic blocks, and closed gates
-    const blockers: AABB[] = [];
-    for (const p of this.platforms) {
-      if (p.solid) blockers.push({ x: p.x, y: p.y, w: p.w, h: p.h });
+    // Light beams are blocked by currently solid platforms, moving platforms, magnetic blocks
+    let count = 0;
+    const blockers = this.beamBlockerScratch;
+    for (let i = 0; i < this.platforms.length; i++) {
+      const p = this.platforms[i];
+      if (p.solid) count = this.pushScratchRect(blockers, count, p.x, p.y, p.w, p.h);
     }
-    for (const mp of this.movingPlatforms) {
-      if (mp.solid) blockers.push({ x: mp.x, y: mp.y, w: mp.w, h: mp.h });
+    for (let i = 0; i < this.movingPlatforms.length; i++) {
+      const mp = this.movingPlatforms[i];
+      if (mp.solid) count = this.pushScratchRect(blockers, count, mp.x, mp.y, mp.w, mp.h);
     }
-    for (const mb of this.magneticBlocks) {
-      if (mb.solid) blockers.push({ x: mb.x, y: mb.y, w: mb.w, h: mb.h });
+    for (let i = 0; i < this.magneticBlocks.length; i++) {
+      const mb = this.magneticBlocks[i];
+      if (mb.solid) count = this.pushScratchRect(blockers, count, mb.x, mb.y, mb.w, mb.h);
     }
+    blockers.length = count;
 
     const res = traceLightBeams(
       this.level.emitters,
@@ -916,8 +970,9 @@ export class ColorixScene extends Phaser.Scene {
     const dt = Math.min(rawDt, 0.05);
     this.timeSec += dt;
 
-    const viewW = this.scale.width;
-    const viewH = this.scale.height;
+    const renderScale = this.viewportProfile.renderScale || 1;
+    const viewW = this.logicalW || this.scale.width / renderScale;
+    const viewH = this.logicalH || this.scale.height / renderScale;
 
     // Smooth background RGB transition (always ticks cleanly)
     const bgLerp = 1 - Math.exp(-9.5 * dt);
@@ -936,7 +991,7 @@ export class ColorixScene extends Phaser.Scene {
 
     // Visual effects & camera trauma always decay smoothly in real dt
     this.particles.update(dt);
-    this.bgRenderer.update(dt, viewW, viewH, this.worldDef.theme);
+    this.bgRenderer.update(dt, viewW, viewH, this.worldDef.theme, this.viewportProfile.bgMoteRatio);
     this.cameraTrauma = Math.max(0, this.cameraTrauma - dt * 1.9);
     this.switchRippleTimer = Math.max(0, this.switchRippleTimer - dt);
 
@@ -996,7 +1051,7 @@ export class ColorixScene extends Phaser.Scene {
   }
 
   private updateTitleShowcase(dt: number, viewW: number, viewH: number): void {
-    this.bgRenderer.update(dt, viewW, viewH, this.worldDef.theme);
+    this.bgRenderer.update(dt, viewW, viewH, this.worldDef.theme, this.viewportProfile.bgMoteRatio);
     this.particles.update(dt);
 
     // Gently cycle ambient spectrum hues on the Title Screen every 4.2s
@@ -1010,11 +1065,27 @@ export class ColorixScene extends Phaser.Scene {
     }
 
     // Gentle parallax pan across the scenic vista, anchored cleanly to bottom ground
-    const maxCamX = Math.max(0, this.level.width - viewW);
-    this.camX = maxCamX > 0 ? ((Math.sin(this.timeSec * 0.14 - Math.PI * 0.5) + 1) * 0.5) * Math.min(260, maxCamX) : -(viewW - this.level.width) * 0.5;
-    this.camY = this.level.height - viewH;
-    this.cameras.main.setZoom(1);
-    this.cameras.main.setScroll(this.camX, this.camY);
+    const renderScale = this.viewportProfile.renderScale || 1;
+    const titleLogicalZoom = this.viewportProfile.isMobile
+      ? Math.max(0.72, Math.min(1, viewW / 760))
+      : this.viewportProfile.logicalZoom;
+    const camZoom = titleLogicalZoom * renderScale;
+    const physW = this.scale.width;
+    const physH = this.scale.height;
+    const effW = viewW / titleLogicalZoom;
+    const effH = viewH / titleLogicalZoom;
+
+    const maxCamX = Math.max(0, this.level.width - effW);
+    this.camX =
+      maxCamX > 0
+        ? ((Math.sin(this.timeSec * 0.14 - Math.PI * 0.5) + 1) * 0.5) * Math.min(260, maxCamX)
+        : -(effW - this.level.width) * 0.5;
+    this.camY = this.level.height - effH;
+    this.cameras.main.setZoom(camZoom);
+    this.cameras.main.setScroll(
+      this.camX - (physW - effW) * 0.5,
+      this.camY - (physH - effH) * 0.5,
+    );
 
     // Gentle breathing scarf animation on Luma
     this.updateScarf(dt);
@@ -1708,73 +1779,66 @@ export class ColorixScene extends Phaser.Scene {
     });
   }
 
-  private computeResponsiveZoom(viewW: number, viewH: number): number {
-    if (viewW < 640) {
-      return Math.max(0.58, Math.min(0.85, viewW / 620));
-    }
-    if (viewH < 640) {
-      return Math.max(0.75, Math.min(1, viewH / 720));
-    }
-    return 1;
-  }
-
   private snapCameraToPlayer(): void {
-    const viewW = this.scale.width;
-    const viewH = this.scale.height;
-    const zoom = this.computeResponsiveZoom(viewW, viewH);
-    this.cameras.main.setZoom(zoom);
-    const effW = viewW / zoom;
-    const effH = viewH / zoom;
-    const maxX = Math.max(0, this.level.width - effW);
+    const renderScale = this.viewportProfile.renderScale || 1;
+    const viewW = this.logicalW || this.scale.width / renderScale;
+    const viewH = this.logicalH || this.scale.height / renderScale;
+    const physW = this.scale.width;
+    const physH = this.scale.height;
 
-    this.camX =
-      this.level.width <= effW
-        ? -(effW - this.level.width) * 0.5
-        : Math.max(0, Math.min(maxX, this.px + PLAYER_W * 0.5 - effW * 0.42));
-    this.camY =
-      this.level.height <= effH
-        ? this.level.height - effH
-        : Math.max(0, Math.min(this.level.height - effH, this.py + PLAYER_H * 0.5 - effH * 0.58));
+    const framing = computeCameraFraming({
+      profile: this.viewportProfile,
+      viewW,
+      viewH,
+      levelWidth: this.level.width,
+      levelHeight: this.level.height,
+      playerCenterX: this.px + PLAYER_W * 0.5,
+      playerCenterY: this.py + PLAYER_H * 0.5,
+      facing: this.facing,
+      useLookAhead: false,
+    });
 
-    // Convert top-left world point to Phaser camera scroll (which accounts for zoom around center)
-    const scrollX = this.camX - (viewW - effW) * 0.5;
-    const scrollY = this.camY - (viewH - effH) * 0.5;
+    const camZoom = framing.logicalZoom * renderScale;
+    this.cameras.main.setZoom(camZoom);
+    this.camX = framing.camX;
+    this.camY = framing.camY;
+
+    // Convert top-left world point to Phaser camera scroll (accounting for HiDPI backing store + zoom)
+    const scrollX = this.camX - (physW - framing.effW) * 0.5;
+    const scrollY = this.camY - (physH - framing.effH) * 0.5;
     this.cameras.main.setScroll(scrollX, scrollY);
   }
 
   private updateCamera(dt: number, viewW: number, viewH: number): void {
-    const zoom = this.computeResponsiveZoom(viewW, viewH);
-    this.cameras.main.setZoom(zoom);
-    const effW = viewW / zoom;
-    const effH = viewH / zoom;
+    const renderScale = this.viewportProfile.renderScale || 1;
+    const physW = this.scale.width;
+    const physH = this.scale.height;
 
-    const lookAhead = this.facing * 68;
-    const maxX = Math.max(0, this.level.width - effW);
+    const framing = computeCameraFraming({
+      profile: this.viewportProfile,
+      viewW,
+      viewH,
+      levelWidth: this.level.width,
+      levelHeight: this.level.height,
+      playerCenterX: this.px + PLAYER_W * 0.5,
+      playerCenterY: this.py + PLAYER_H * 0.5,
+      facing: this.facing,
+      useLookAhead: true,
+    });
 
-    let targetX: number;
-    if (this.level.width <= effW) {
-      targetX = -(effW - this.level.width) * 0.5;
-    } else {
-      targetX = Math.max(0, Math.min(maxX, this.px + PLAYER_W * 0.5 + lookAhead - effW * 0.48));
-    }
-
-    let targetY: number;
-    if (this.level.height <= effH) {
-      targetY = this.level.height - effH;
-    } else {
-      targetY = Math.max(0, Math.min(this.level.height - effH, this.py + PLAYER_H * 0.5 - effH * 0.58));
-    }
+    const camZoom = framing.logicalZoom * renderScale;
+    this.cameras.main.setZoom(camZoom);
 
     const damp = 1 - Math.exp(-7.5 * dt);
-    this.camX += (targetX - this.camX) * damp;
-    this.camY += (targetY - this.camY) * damp;
+    this.camX += (framing.camX - this.camX) * damp;
+    this.camY += (framing.camY - this.camY) * damp;
 
     const shake = this.cameraTrauma * this.cameraTrauma * 12;
     const sx = shake > 0.1 ? (Math.random() - 0.5) * 2 * shake : 0;
     const sy = shake > 0.1 ? (Math.random() - 0.5) * 2 * shake : 0;
 
-    const scrollX = this.camX - (viewW - effW) * 0.5;
-    const scrollY = this.camY - (viewH - effH) * 0.5;
+    const scrollX = this.camX - (physW - framing.effW) * 0.5;
+    const scrollY = this.camY - (physH - framing.effH) * 0.5;
     this.cameras.main.setScroll(scrollX + sx, scrollY + sy);
   }
 
@@ -1815,12 +1879,17 @@ export class ColorixScene extends Phaser.Scene {
   }
 
   private renderFrame(viewW: number, viewH: number): void {
-    // 1. Background Parallax Layer (compensate for responsive camera zoom so sky fills 100% of viewport)
-    const zoom = this.cameras.main.zoom || 1;
-    this.bgGraphics.setScale(1 / zoom);
+    // 1. Background Parallax Layer (compensate for HiDPI backing store + responsive camera zoom)
+    const physW = this.scale.width;
+    const physH = this.scale.height;
+    const renderScale = this.viewportProfile.renderScale || 1;
+    const camZoom = this.cameras.main.zoom || 1;
+    const logicalZoom = camZoom / renderScale;
+
+    this.bgGraphics.setScale(1 / logicalZoom);
     this.bgGraphics.setPosition(
-      (-viewW * (1 - zoom)) / (2 * zoom),
-      (-viewH * (1 - zoom)) / (2 * zoom),
+      (-physW * (1 - camZoom)) / (2 * camZoom),
+      (-physH * (1 - camZoom)) / (2 * camZoom),
     );
     this.bgRenderer.render(
       this.bgGraphics,
@@ -1832,17 +1901,30 @@ export class ColorixScene extends Phaser.Scene {
       this.worldDef,
       this.timeSec,
       this.settings.graphicsQuality,
+      {
+        bands: this.viewportProfile.bgBands,
+        moteRatio: this.viewportProfile.bgMoteRatio,
+        drawLightShafts: this.viewportProfile.drawLightShafts,
+        highFidelity: Boolean(this.viewportProfile.highFidelityDetail),
+      },
     );
+
+    // Horizontal camera frustum bounds for lossless off-screen draw culling
+    const effW = viewW / logicalZoom;
+    const cullMinX = this.camX - 120;
+    const cullMaxX = this.camX + effW + 120;
 
     // 2. World Geometry Layer
     const wg = this.worldGraphics;
     wg.clear();
 
     // Draw rails for Moving Platforms & Magnetic Blocks first (behind platforms)
-    this.renderRails(wg);
+    this.renderRails(wg, cullMinX, cullMaxX);
 
     // Platforms, Color Blocks, Bridges, Hidden Walls
-    for (const p of this.platforms) {
+    for (let i = 0; i < this.platforms.length; i++) {
+      const p = this.platforms[i];
+      if (p.x + p.w < cullMinX || p.x > cullMaxX) continue;
       if (p.kind === 'neutral') {
         // Extend ground bedrock slabs cleanly below the viewport bottom so levels never float
         const touchesBottom = p.y + p.h >= this.level.height - 4;
@@ -1858,17 +1940,23 @@ export class ColorixScene extends Phaser.Scene {
     }
 
     // Moving Platforms
-    for (const mp of this.movingPlatforms) {
+    for (let i = 0; i < this.movingPlatforms.length; i++) {
+      const mp = this.movingPlatforms[i];
+      if (mp.x + mp.w < cullMinX || mp.x > cullMaxX) continue;
       this.drawMovingPlatform(wg, mp);
     }
 
     // Magnetic Color Objects
-    for (const mb of this.magneticBlocks) {
+    for (let i = 0; i < this.magneticBlocks.length; i++) {
+      const mb = this.magneticBlocks[i];
+      if (mb.x + mb.w < cullMinX || mb.x > cullMaxX) continue;
       this.drawMagneticBlock(wg, mb);
     }
 
     // Hazards (Crystal Thorns)
-    for (const h of this.hazards) {
+    for (let i = 0; i < this.hazards.length; i++) {
+      const h = this.hazards[i];
+      if (h.x + h.w < cullMinX || h.x > cullMaxX) continue;
       this.drawHazard(wg, h);
     }
 
@@ -1876,14 +1964,14 @@ export class ColorixScene extends Phaser.Scene {
     const eg = this.entityGraphics;
     eg.clear();
 
-    this.renderGates(eg);
-    this.renderLocks(eg);
+    this.renderGates(eg, cullMinX, cullMaxX);
+    this.renderLocks(eg, cullMinX, cullMaxX);
     this.renderOptics(eg);
-    this.renderCheckpoints(eg);
-    this.renderCrystals(eg);
+    this.renderCheckpoints(eg, cullMinX, cullMaxX);
+    this.renderCrystals(eg, cullMinX, cullMaxX);
     this.renderPortal(eg);
-    this.renderMonsters(eg);
-    this.renderBlasts(eg);
+    this.renderMonsters(eg, cullMinX, cullMaxX);
+    this.renderBlasts(eg, cullMinX, cullMaxX);
 
     if (!this.isDead) {
       this.renderPlayer(eg);
@@ -1894,7 +1982,7 @@ export class ColorixScene extends Phaser.Scene {
     // 4. Particles & Ripple FX Layer
     const fg = this.fxGraphics;
     fg.clear();
-    this.particles.render(fg);
+    this.particles.render(fg, cullMinX, cullMaxX);
 
     if (this.switchRippleTimer > 0 && this.activeColor !== 'void') {
       const prog = 1 - this.switchRippleTimer / 0.28;
@@ -1903,7 +1991,7 @@ export class ColorixScene extends Phaser.Scene {
       fg.strokeCircle(this.px + PLAYER_W * 0.5, this.py + PLAYER_H * 0.5, 24 + prog * 220);
     }
 
-    // 5. Smooth Death / Respawn Transition Curtain (screen-space, zoom-compensated)
+    // 5. Smooth Death / Respawn Transition Curtain (screen-space, HiDPI & zoom-compensated)
     const df = this.deathFadeGraphics;
     df.clear();
     let curtainAlpha = 0;
@@ -1915,10 +2003,10 @@ export class ColorixScene extends Phaser.Scene {
       curtainAlpha = (this.respawnFadeInTimer / RESPAWN_FADE_IN_DURATION) * 0.72;
     }
     if (curtainAlpha > 0.01) {
-      df.setScale(1 / zoom);
+      df.setScale(1 / logicalZoom);
       df.setPosition(
-        (-viewW * (1 - zoom)) / (2 * zoom),
-        (-viewH * (1 - zoom)) / (2 * zoom),
+        (-physW * (1 - camZoom)) / (2 * camZoom),
+        (-physH * (1 - camZoom)) / (2 * camZoom),
       );
       df.fillStyle(0x06080f, curtainAlpha);
       df.fillRect(0, 0, viewW, viewH);
@@ -1947,6 +2035,14 @@ export class ColorixScene extends Phaser.Scene {
       for (let sx = x + 64; sx < x + w - 20; sx += 64) {
         g.lineBetween(sx, y + 4, sx, y + Math.min(34, h - 4));
       }
+    }
+
+    // Desktop-only subtle inner chisel highlight for crisp stone separation on large displays
+    if (this.viewportProfile.highFidelityDetail && w >= 48 && h >= 20) {
+      g.fillStyle(0x94a3b8, 0.14);
+      g.fillRect(x + 4, y + 4, Math.max(0, w - 8), 1);
+      g.fillStyle(0x06080f, 0.45);
+      g.fillRect(x + 2, y + Math.min(22, h - 2), Math.max(0, w - 4), 1.5);
     }
   }
 
@@ -1984,6 +2080,12 @@ export class ColorixScene extends Phaser.Scene {
     // Top specular highlight
     g.fillStyle(0xffffff, 0.38 * a);
     g.fillRect(x + 3, y + 1.5, Math.max(0, w - 6), 2.5);
+
+    // Desktop-only crisp inner prism rim highlight
+    if (this.viewportProfile.highFidelityDetail && w >= 24 && h >= 20) {
+      g.lineStyle(1, 0xffffff, 0.22 * a);
+      g.strokeRoundedRect(x + 2.5, y + 2.5, Math.max(0, w - 5), Math.max(0, h - 5), 3);
+    }
 
     // Crisp dark architectural outline
     g.lineStyle(1.5, 0x090b12, 0.65 * a);
@@ -2061,8 +2163,12 @@ export class ColorixScene extends Phaser.Scene {
     g.lineBetween(p.x + p.w - 4, p.y + p.h * 0.65, p.x + 4, p.y + p.h * 0.8);
   }
 
-  private renderRails(g: Phaser.GameObjects.Graphics): void {
-    for (const mp of this.movingPlatforms) {
+  private renderRails(g: Phaser.GameObjects.Graphics, cullMinX: number, cullMaxX: number): void {
+    for (let i = 0; i < this.movingPlatforms.length; i++) {
+      const mp = this.movingPlatforms[i];
+      const minX = Math.min(mp.startX, mp.toX);
+      const maxX = Math.max(mp.startX, mp.toX) + mp.w;
+      if (maxX < cullMinX || minX > cullMaxX) continue;
       const cx1 = mp.startX + mp.w * 0.5;
       const cy1 = mp.startY + mp.h * 0.5;
       const cx2 = mp.toX + mp.w * 0.5;
@@ -2074,7 +2180,11 @@ export class ColorixScene extends Phaser.Scene {
       g.fillCircle(cx2, cy2, 4);
     }
 
-    for (const mb of this.magneticBlocks) {
+    for (let i = 0; i < this.magneticBlocks.length; i++) {
+      const mb = this.magneticBlocks[i];
+      const minX = Math.min(mb.startX, mb.toX);
+      const maxX = Math.max(mb.startX, mb.toX) + mb.w;
+      if (maxX < cullMinX || minX > cullMaxX) continue;
       const reactCol = COLOR_MAP[mb.reactColorId].num;
       const cx1 = mb.startX + mb.w * 0.5;
       const cy1 = mb.startY + mb.h * 0.5;
@@ -2149,8 +2259,10 @@ export class ColorixScene extends Phaser.Scene {
     }
   }
 
-  private renderGates(g: Phaser.GameObjects.Graphics): void {
-    for (const gate of this.gates) {
+  private renderGates(g: Phaser.GameObjects.Graphics, cullMinX: number, cullMaxX: number): void {
+    for (let i = 0; i < this.gates.length; i++) {
+      const gate = this.gates[i];
+      if (gate.x + gate.w < cullMinX || gate.x > cullMaxX) continue;
       const def = COLOR_MAP[gate.colorId];
       // Permanent gate frame posts
       g.fillStyle(0x0f1320, 1);
@@ -2183,8 +2295,10 @@ export class ColorixScene extends Phaser.Scene {
     }
   }
 
-  private renderLocks(g: Phaser.GameObjects.Graphics): void {
-    for (const lk of this.locks) {
+  private renderLocks(g: Phaser.GameObjects.Graphics, cullMinX: number, cullMaxX: number): void {
+    for (let i = 0; i < this.locks.length; i++) {
+      const lk = this.locks[i];
+      if (lk.x + 80 < cullMinX || lk.x - 80 > cullMaxX) continue;
       // Sculpted obelisk pedestal
       g.fillStyle(0x0f1320, 1);
       g.fillRoundedRect(lk.x - 20, lk.y - 64, 40, 64, 4);
@@ -2276,8 +2390,10 @@ export class ColorixScene extends Phaser.Scene {
     }
   }
 
-  private renderCheckpoints(g: Phaser.GameObjects.Graphics): void {
-    for (const cp of this.checkpoints) {
+  private renderCheckpoints(g: Phaser.GameObjects.Graphics, cullMinX: number, cullMaxX: number): void {
+    for (let i = 0; i < this.checkpoints.length; i++) {
+      const cp = this.checkpoints[i];
+      if (cp.x + 30 < cullMinX || cp.x - 30 > cullMaxX) continue;
       // Stone lantern pillar
       g.fillStyle(0x161c2c, 1);
       g.fillRect(cp.x - 5, cp.y - 54, 10, 54);
@@ -2303,9 +2419,11 @@ export class ColorixScene extends Phaser.Scene {
     }
   }
 
-  private renderCrystals(g: Phaser.GameObjects.Graphics): void {
-    for (const c of this.crystals) {
+  private renderCrystals(g: Phaser.GameObjects.Graphics, cullMinX: number, cullMaxX: number): void {
+    for (let i = 0; i < this.crystals.length; i++) {
+      const c = this.crystals[i];
       if (c.collected) continue;
+      if (c.x + 28 < cullMinX || c.x - 28 > cullMaxX) continue;
       const def = COLOR_MAP[c.colorId];
       const bob = Math.sin(this.timeSec * 3.4 + c.x * 0.02) * 5;
       const cy = c.y + bob;
@@ -2382,10 +2500,12 @@ export class ColorixScene extends Phaser.Scene {
     }
   }
 
-  private renderMonsters(g: Phaser.GameObjects.Graphics): void {
-    for (const m of this.monsters) {
+  private renderMonsters(g: Phaser.GameObjects.Graphics, cullMinX: number, cullMaxX: number): void {
+    for (let i = 0; i < this.monsters.length; i++) {
+      const m = this.monsters[i];
       if (m.suppressed) continue;
       if (m.defeated && m.defeatTimer <= 0) continue;
+      if (m.x + m.w + 30 < cullMinX || m.x - 30 > cullMaxX) continue;
 
       const def = COLOR_MAP[m.vulnerableColor];
       const cx = m.x + m.w * 0.5;
@@ -2536,8 +2656,10 @@ export class ColorixScene extends Phaser.Scene {
     }
   }
 
-  private renderBlasts(g: Phaser.GameObjects.Graphics): void {
-    for (const b of this.blasts) {
+  private renderBlasts(g: Phaser.GameObjects.Graphics, cullMinX: number, cullMaxX: number): void {
+    for (let i = 0; i < this.blasts.length; i++) {
+      const b = this.blasts[i];
+      if (b.x + 40 < cullMinX || b.x - 40 > cullMaxX) continue;
       const dir = b.vx >= 0 ? 1 : -1;
       const colHex = b.color === 'void' ? 0x93c5fd : COLOR_MAP[b.color].num;
 
@@ -2633,6 +2755,14 @@ export class ColorixScene extends Phaser.Scene {
     g.fillCircle(cx, headY, 11.5 * this.scaleX);
     g.lineStyle(1.6, 0xe2e8f0, 0.55);
     g.strokeCircle(cx, headY, 11.5 * this.scaleX);
+
+    // Desktop-only subtle chromatic rim sheen on cloak & hood for razor-sharp silhouette clarity
+    if (this.viewportProfile.highFidelityDetail) {
+      g.lineStyle(1.1, scarfColor, 0.42);
+      g.strokeCircle(cx, headY, 12.6 * this.scaleX);
+      g.lineStyle(1.1, 0xe2e8f0, 0.28);
+      g.lineBetween(cx, topY + 3, cx + this.facing * w * 0.46, bottomY - 10);
+    }
 
     // Expressive luminous eyes facing travel direction
     const eyeOffsetX = this.facing * 4;

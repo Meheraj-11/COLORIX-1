@@ -592,7 +592,7 @@ export function CreditsModal({ t, onClose }: { t: Translations; onClose: () => v
             <div>Audio: Procedural Modal Web Audio Synthesizer</div>
           </div>
           <div className="pt-3 border-t border-white/10 font-display text-sm font-semibold text-white">
-            Developed by Meheraj Hossain
+            Developed by Meheraj
           </div>
         </div>
       </div>

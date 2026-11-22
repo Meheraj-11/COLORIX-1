@@ -36,21 +36,38 @@ import {
   persistSaveData,
   recordLevelCompletion,
 } from './game/save';
+import { computeMobileViewportProfile, type MobileViewportProfile } from './game/mobileLayout';
 import type {
   AppScreen,
   GameSettings,
+  GraphicsQuality,
   HudSnapshot,
   LevelCompleteStats,
   SaveData,
 } from './game/types';
 
-function detectTouchViewport(): boolean {
-  if (typeof window === 'undefined') return false;
-  return (
-    window.innerWidth < 900 ||
+function readViewportProfile(quality: GraphicsQuality): MobileViewportProfile {
+  if (typeof window === 'undefined') {
+    return computeMobileViewportProfile({
+      width: 1280,
+      height: 720,
+      devicePixelRatio: 1,
+      isTouchDevice: false,
+      graphicsQuality: quality,
+    });
+  }
+  const isTouchDevice =
     'ontouchstart' in window ||
-    navigator.maxTouchPoints > 0
-  );
+    navigator.maxTouchPoints > 0 ||
+    Boolean(window.matchMedia?.('(pointer: coarse)').matches);
+  return computeMobileViewportProfile({
+    width: window.innerWidth,
+    height: window.innerHeight,
+    devicePixelRatio: window.devicePixelRatio || 1,
+    isTouchDevice,
+    hardwareConcurrency: navigator.hardwareConcurrency,
+    graphicsQuality: quality,
+  });
 }
 
 export default function App() {
@@ -73,7 +90,9 @@ export default function App() {
   const [howToPlayOpen, setHowToPlayOpen] = useState(false);
   const [creditsOpen, setCreditsOpen] = useState(false);
   const [checkpointBanner, setCheckpointBanner] = useState(false);
-  const [isTouchViewport, setIsTouchViewport] = useState<boolean>(() => detectTouchViewport());
+  const [viewportProfile, setViewportProfile] = useState<MobileViewportProfile>(() =>
+    readViewportProfile(save.settings.graphicsQuality),
+  );
 
   const [hud, setHud] = useState<HudSnapshot | null>(null);
   const [completeStats, setCompleteStats] = useState<LevelCompleteStats | null>(null);
@@ -138,12 +157,26 @@ export default function App() {
     document.body.dataset.state = bodyState;
   }, [screen, loadingPhase]);
 
-  // Responsive touch detection on resize
+  // Responsive mobile viewport & orientation detection on resize / orientation change
   useEffect(() => {
-    const onResize = () => setIsTouchViewport(detectTouchViewport());
-    window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
-  }, []);
+    const syncProfile = () => setViewportProfile(readViewportProfile(saveRef.current.settings.graphicsQuality));
+    syncProfile();
+    window.addEventListener('resize', syncProfile);
+    window.addEventListener('orientationchange', syncProfile);
+    window.visualViewport?.addEventListener('resize', syncProfile);
+    return () => {
+      window.removeEventListener('resize', syncProfile);
+      window.removeEventListener('orientationchange', syncProfile);
+      window.visualViewport?.removeEventListener('resize', syncProfile);
+    };
+  }, [save.settings.graphicsQuality]);
+
+  // Clear held movement inputs whenever the 16-Color Wheel opens so mobile touches never stick
+  useEffect(() => {
+    if (wheelOpen) {
+      engineRef.current?.clearInputs();
+    }
+  }, [wheelOpen]);
 
   const startLevel = useCallback((levelId: number) => {
     audioManager.unlock();
@@ -500,7 +533,7 @@ export default function App() {
 
   const showTouchControls =
     save.settings.touchMode === 'on' ||
-    (save.settings.touchMode === 'auto' && isTouchViewport);
+    (save.settings.touchMode === 'auto' && viewportProfile.isMobile);
 
   const handleSelectColor = useCallback((color: ActiveColor) => {
     audioManager.unlock();
@@ -583,7 +616,9 @@ export default function App() {
           hud={hud}
           muted={save.settings.muted}
           t={t}
-          showTouchControls={showTouchControls && screen === 'playing'}
+          isMobile={viewportProfile.isMobile}
+          orientation={viewportProfile.orientation}
+          showTouchControls={showTouchControls && screen === 'playing' && !wheelOpen}
           checkpointBanner={checkpointBanner}
           onSelectColor={handleSelectColor}
           onOpenWheel={() => {

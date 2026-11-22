@@ -40,7 +40,7 @@ export function TitleScreen({
   const crystals = countTotalCollectedCrystals(save);
 
   return (
-    <div className="fixed inset-0 z-20 flex flex-col justify-between p-6 sm:p-10 md:p-14 pointer-events-none">
+    <div className="fixed inset-0 z-20 flex flex-col justify-between p-5 sm:p-10 md:p-14 [@media(max-height:480px)]:py-3 [@media(max-height:480px)]:px-6 pointer-events-none overflow-hidden">
       {/* Subtle dark atmospheric left vignette scrim so title lockup has effortless legibility over live canvas */}
       <div
         className="fixed inset-y-0 left-0 w-full md:w-[58%] pointer-events-none"
@@ -109,22 +109,24 @@ export function TitleScreen({
       </div>
 
       {/* Main Left-Third Focal Anchor over Calm Negative Space */}
-      <div className="relative z-10 max-w-md flex flex-col items-start gap-6 my-auto">
-        <div className="flex flex-col gap-1.5">
-          <ColorixLogo />
-          <p className="font-display text-base sm:text-lg font-medium tracking-wide text-slate-200/95 pl-1 hud-text-shadow">
+      <div className="relative z-10 max-w-md flex flex-col items-start gap-6 [@media(max-height:480px)]:gap-3 my-auto">
+        <div className="flex flex-col gap-1.5 [@media(max-height:480px)]:gap-0.5">
+          <div className="[@media(max-height:480px)]:scale-[0.82] [@media(max-height:480px)]:origin-left">
+            <ColorixLogo />
+          </div>
+          <p className="font-display text-base sm:text-lg [@media(max-height:480px)]:text-sm font-medium tracking-wide text-slate-200/95 pl-1 hud-text-shadow">
             {t.subtitle}
           </p>
         </div>
 
         {/* Primary Action Stack */}
-        <div className="flex flex-col gap-2.5 w-full max-w-[270px] pointer-events-auto">
+        <div className="flex flex-col gap-2.5 [@media(max-height:480px)]:gap-1.5 w-full max-w-[270px] pointer-events-auto">
           {hasProgress ? (
             <button
               type="button"
               data-start="true"
               onClick={onContinue}
-              className="w-full py-3.5 px-6 rounded-lg bg-[#F8FAFC] text-[#0B0D14] font-display font-bold text-base tracking-wide hover:bg-white active:scale-[0.99] transition-transform shadow-lg cursor-pointer whitespace-nowrap text-left flex items-center justify-between focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-400"
+              className="w-full py-3.5 [@media(max-height:480px)]:py-2.5 px-6 rounded-lg bg-[#F8FAFC] text-[#0B0D14] font-display font-bold text-base tracking-wide hover:bg-white active:scale-[0.99] transition-transform shadow-lg cursor-pointer whitespace-nowrap text-left flex items-center justify-between focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-400"
             >
               <span>{t.continueGame}</span>
               <span className="font-mono-num text-xs font-semibold text-slate-600">

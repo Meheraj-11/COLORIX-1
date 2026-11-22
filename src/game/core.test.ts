@@ -16,6 +16,11 @@ import {
   MIN_LOADING_DISPLAY_MS,
 } from './loader';
 import {
+  computeCameraFraming,
+  computeMobileViewportProfile,
+  resolveDirectionalPadInput,
+} from './mobileLayout';
+import {
   advanceColorLock,
   computeSafeMonsterResetX,
   evaluateColorBlastHit,
@@ -383,6 +388,213 @@ test('Loading system tracks essential tasks accurately, keeps optional audio non
   assert.equal(errored.readyToTransition, false);
   assert.ok(errored.targetPercent < 100);
 });
+
+test('desktop PC/Laptop profile uses pixel-budgeted HiDPI & proportional zoom while mobile stays strictly unchanged', () => {
+  // Desktop 1440x900 @ DPR 2 (Retina laptop): crisp HiDPI renderScale within pixel budget + proportional zoom
+  const retinaLaptop = computeMobileViewportProfile({
+    width: 1440,
+    height: 900,
+    devicePixelRatio: 2,
+    isTouchDevice: false,
+    hardwareConcurrency: 8,
+    graphicsQuality: 'high',
+  });
+  assert.equal(retinaLaptop.isMobile, false);
+  assert.ok(retinaLaptop.renderScale >= 1.6 && retinaLaptop.renderScale <= 2.0);
+  assert.ok(1440 * 900 * retinaLaptop.renderScale * retinaLaptop.renderScale <= 4_000_000);
+  assert.equal(retinaLaptop.logicalZoom, 1.25); // 900 / 720 = exact 1.25x
+  assert.equal(retinaLaptop.topSafePx, 0);
+  assert.equal(retinaLaptop.bottomSafePx, 0);
+  assert.equal(retinaLaptop.bgBands, 28);
+  assert.equal(retinaLaptop.particleScale, 1);
+  assert.equal(retinaLaptop.highFidelityDetail, true);
+
+  // Desktop 1920x1080 @ DPR 1.25 (Windows Full HD 125% scaling): exact 1.5x zoom fills screen edge-to-edge
+  const fhdPc = computeMobileViewportProfile({
+    width: 1920,
+    height: 1080,
+    devicePixelRatio: 1.25,
+    isTouchDevice: false,
+    hardwareConcurrency: 8,
+    graphicsQuality: 'high',
+  });
+  assert.equal(fhdPc.isMobile, false);
+  assert.equal(fhdPc.renderScale, 1.25);
+  assert.equal(fhdPc.logicalZoom, 1.5); // 1920/1.5 = 1280, 1080/1.5 = 720 (zero empty side margins!)
+
+  // Desktop 2560x1440 @ DPR 2 (QHD PC): stays within smooth physical pixel budget (no 5K bloat) & exact 2.0x zoom
+  const qhdPc = computeMobileViewportProfile({
+    width: 2560,
+    height: 1440,
+    devicePixelRatio: 2,
+    isTouchDevice: false,
+    hardwareConcurrency: 8,
+    graphicsQuality: 'high',
+  });
+  assert.equal(qhdPc.isMobile, false);
+  assert.equal(qhdPc.logicalZoom, 2);
+  assert.ok(2560 * 1440 * qhdPc.renderScale * qhdPc.renderScale <= 4_100_000);
+
+  // Desktop Low Quality disables desktop high-fidelity detail & lowers sky bands/DPR cap
+  const lowDesktop = computeMobileViewportProfile({
+    width: 1366,
+    height: 768,
+    devicePixelRatio: 2,
+    isTouchDevice: false,
+    hardwareConcurrency: 4,
+    graphicsQuality: 'low',
+  });
+  assert.equal(lowDesktop.isMobile, false);
+  assert.equal(lowDesktop.renderScale, 1.25);
+  assert.equal(lowDesktop.bgBands, 14);
+  assert.equal(lowDesktop.highFidelityDetail, false);
+  assert.equal(lowDesktop.drawLightShafts, false);
+
+  // STRICT MOBILE PRESERVATION: Mobile portrait (390x844 @ DPR 3) unchanged
+  const portrait = computeMobileViewportProfile({
+    width: 390,
+    height: 844,
+    devicePixelRatio: 3,
+    isTouchDevice: true,
+    hardwareConcurrency: 6,
+    graphicsQuality: 'high',
+  });
+  assert.equal(portrait.isMobile, true);
+  assert.equal(portrait.orientation, 'portrait');
+  assert.equal(portrait.renderScale, 2);
+  assert.equal(portrait.highFidelityDetail, undefined);
+  assert.ok(portrait.topSafePx >= 98 && portrait.bottomSafePx >= 104);
+  assert.ok(portrait.logicalZoom >= 0.66 && portrait.logicalZoom <= 0.9);
+
+  // STRICT MOBILE PRESERVATION: Low-end mobile unchanged
+  const lowEnd = computeMobileViewportProfile({
+    width: 360,
+    height: 740,
+    devicePixelRatio: 3,
+    isTouchDevice: true,
+    hardwareConcurrency: 4,
+    graphicsQuality: 'low',
+  });
+  assert.equal(lowEnd.isMobile, true);
+  assert.equal(lowEnd.isLowEndMobile, true);
+  assert.equal(lowEnd.renderScale, 1.5);
+  assert.equal(lowEnd.drawLightShafts, false);
+  assert.equal(lowEnd.bgBands, 8);
+
+  // STRICT MOBILE PRESERVATION: Mobile landscape phone (932x430) unchanged
+  const landscape = computeMobileViewportProfile({
+    width: 932,
+    height: 430,
+    devicePixelRatio: 2,
+    isTouchDevice: true,
+    hardwareConcurrency: 6,
+    graphicsQuality: 'high',
+  });
+  assert.equal(landscape.isMobile, true);
+  assert.equal(landscape.orientation, 'landscape');
+  assert.equal(landscape.renderScale, 2);
+  assert.ok(landscape.topSafePx <= 56);
+  assert.ok(landscape.bottomSafePx <= 90);
+});
+
+test('camera framing keeps player unobstructed on mobile and fills PC/Laptop resolutions cleanly without floating voids', () => {
+  const mobileViewports = [
+    { name: 'portrait-390x844', w: 390, h: 844 },
+    { name: 'compact-portrait-360x740', w: 360, h: 740 },
+    { name: 'landscape-844x390', w: 844, h: 390 },
+    { name: 'compact-landscape-667x375', w: 667, h: 375 },
+  ];
+
+  // Level 1 standard geometry: 1280x720, ground surface at y=600, player body y=556..600 (center 578)
+  const levelWidth = 1280;
+  const levelHeight = 720;
+  const playerTopWorldY = 556;
+  const playerBottomWorldY = 600;
+  const playerCenterY = 578;
+
+  for (const vp of mobileViewports) {
+    const profile = computeMobileViewportProfile({
+      width: vp.w,
+      height: vp.h,
+      devicePixelRatio: 2,
+      isTouchDevice: true,
+      graphicsQuality: 'high',
+    });
+    const cam = computeCameraFraming({
+      profile,
+      viewW: vp.w,
+      viewH: vp.h,
+      levelWidth,
+      levelHeight,
+      playerCenterX: 114,
+      playerCenterY,
+      facing: 1,
+      useLookAhead: false,
+    });
+
+    const playerTopScreenY = (playerTopWorldY - cam.camY) * cam.logicalZoom;
+    const playerBottomScreenY = (playerBottomWorldY - cam.camY) * cam.logicalZoom;
+
+    assert.ok(
+      playerTopScreenY >= profile.topSafePx,
+      `${vp.name}: player top (${playerTopScreenY.toFixed(1)}) must stay below top HUD (${profile.topSafePx})`,
+    );
+    assert.ok(
+      playerBottomScreenY <= vp.h - profile.bottomSafePx + 1,
+      `${vp.name}: player feet (${playerBottomScreenY.toFixed(1)}) must stay above bottom controls (${vp.h - profile.bottomSafePx})`,
+    );
+  }
+
+  // Desktop resolutions (1280x720, 1366x768, 1440x900, 1920x1080, 2560x1440):
+  // Level fills full width/height with zero floating side margins and player stays cleanly above bottom HUD dock!
+  const desktopViewports = [
+    { name: 'hd-1280x720', w: 1280, h: 720 },
+    { name: 'laptop-1366x768', w: 1366, h: 768 },
+    { name: 'macbook-1440x900', w: 1440, h: 900 },
+    { name: 'fhd-1920x1080', w: 1920, h: 1080 },
+    { name: 'qhd-2560x1440', w: 2560, h: 1440 },
+  ];
+
+  for (const vp of desktopViewports) {
+    const desktopProfile = computeMobileViewportProfile({
+      width: vp.w,
+      height: vp.h,
+      devicePixelRatio: 1,
+      isTouchDevice: false,
+      graphicsQuality: 'high',
+    });
+    const desktopCam = computeCameraFraming({
+      profile: desktopProfile,
+      viewW: vp.w,
+      viewH: vp.h,
+      levelWidth,
+      levelHeight,
+      playerCenterX: 114,
+      playerCenterY,
+      facing: 1,
+      useLookAhead: false,
+    });
+
+    // Zero huge floating side voids (effW <= 1281 -> camX >= -1)
+    assert.ok(
+      desktopCam.camX >= -1,
+      `${vp.name}: expected no floating left void, got camX=${desktopCam.camX}`,
+    );
+    const playerBottomScreenY = (playerBottomWorldY - desktopCam.camY) * desktopCam.logicalZoom;
+    assert.ok(
+      playerBottomScreenY <= vp.h - 90,
+      `${vp.name}: player feet (${playerBottomScreenY.toFixed(1)}) must stay cleanly above bottom HUD dock`,
+    );
+  }
+});
+
+test('directional touch pad prevents simultaneous left+right and enforces center dead-zone', () => {
+  assert.deepEqual(resolveDirectionalPadInput(20, 140), { left: true, right: false });
+  assert.deepEqual(resolveDirectionalPadInput(70, 140), { left: false, right: false });
+  assert.deepEqual(resolveDirectionalPadInput(115, 140), { left: false, right: true });
+  assert.deepEqual(resolveDirectionalPadInput(0, 0), { left: false, right: false });
+});
+
 
 
 
