@@ -1,0 +1,18 @@
+{
+  "appId": "com.meheraj.colorix",
+  "appName": "COLORIX",
+  "webDir": "dist",
+  "backgroundColor": "#0B0D14",
+  "android": {
+    "backgroundColor": "#0B0D14",
+    "allowMixedContent": false,
+    "captureInput": true,
+    "webContentsDebuggingEnabled": false
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchAutoHide": true,
+      "backgroundColor": "#0B0D14"
+    }
+  }
+}

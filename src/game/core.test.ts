@@ -16,6 +16,19 @@ import {
   MIN_LOADING_DISPLAY_MS,
 } from './loader';
 import {
+  clearAllMultiTouchButtons,
+  createMultiTouchButtonState,
+  getActiveControlButtons,
+  getDefaultMobileControlPositions,
+  getMobileButtonPixelSize,
+  getPlayableControlArea,
+  pressMultiTouchButton,
+  pxCenterToNormalized,
+  releaseMultiTouchToken,
+  resolveMobileControlRects,
+  sanitizeMobileControlsLayout,
+} from './mobileControlsLayout';
+import {
   clearDirectionalHold,
   computeCameraFraming,
   computeMobileViewportProfile,
@@ -25,6 +38,7 @@ import {
   releaseDirectionalHoldToken,
   resolveDirectionalPadInput,
 } from './mobileLayout';
+import { evaluateMobileOrientationState } from './orientation';
 import {
   advanceColorLock,
   computeSafeMonsterResetX,
@@ -636,7 +650,148 @@ test('mobile directional hold state machine supports continuous hold, immediate 
   assert.deepEqual(getDirectionalHoldOutput(state), { left: false, right: false, activeDir: null });
 });
 
+test('custom mobile controls layout clamps inside visible screen across viewports and persists cleanly in SaveData', () => {
+  // Out-of-bounds drag coordinates must clamp strictly inside visible playable area
+  const btnSize = getMobileButtonPixelSize('left', 390, 844);
+  const topLeftClamped = pxCenterToNormalized(-100, -50, btnSize, 390, 844);
+  const bottomRightClamped = pxCenterToNormalized(999, 1500, btnSize, 390, 844);
 
+  const customPositions = {
+    left: topLeftClamped,
+    right: { x: 0.44, y: 0.86 },
+    blast: { x: 0.72, y: 0.78 },
+    jump: bottomRightClamped,
+  };
 
+  // Verify every resolved button stays strictly inside screen & below top HUD across mobile sizes
+  const sizes = [
+    { w: 360, h: 740 },
+    { w: 390, h: 844 },
+    { w: 667, h: 375 },
+    { w: 844, h: 390 },
+  ];
+  for (const s of sizes) {
+    const { topSafeY } = getPlayableControlArea(s.w, s.h);
+    const rects = resolveMobileControlRects(customPositions, s.w, s.h);
+    for (const r of Object.values(rects)) {
+      assert.ok(r.left >= 0, `left (${r.left}) must stay >= 0 on ${s.w}x${s.h}`);
+      assert.ok(r.left + r.w <= s.w, `right edge (${r.left + r.w}) must stay <= ${s.w}`);
+      assert.ok(r.top >= topSafeY - 1, `top (${r.top}) must stay below topSafeY (${topSafeY}) on ${s.w}x${s.h}`);
+      assert.ok(r.top + r.h <= s.h, `bottom edge (${r.top + r.h}) must stay <= ${s.h}`);
+    }
+    // Relative horizontal ordering preserved across screen size changes
+    assert.ok(rects.left.centerX < rects.right.centerX);
+    assert.ok(rects.right.centerX < rects.blast.centerX);
+    assert.ok(rects.blast.centerX < rects.jump.centerX);
+  }
 
+  // Save sanitization preserves customized layout and clamps invalid numbers safely
+  const saved = sanitizeSaveData({
+    settings: {
+      mobileControlsLayout: {
+        customized: true,
+        buttons: {
+          left: { x: 0.12, y: 0.85 },
+          right: { x: 0.36, y: 0.82 },
+          blast: { x: 0.74, y: 0.75 },
+          jump: { x: 0.9, y: 0.88 },
+        },
+      },
+    },
+  });
+  assert.equal(saved.settings.mobileControlsLayout.customized, true);
+  assert.equal(saved.settings.mobileControlsLayout.buttons.left.x, 0.12);
+  assert.equal(saved.settings.mobileControlsLayout.buttons.right.x, 0.36);
+  assert.equal(saved.settings.mobileControlsLayout.buttons.jump.y, 0.88);
 
+  const recovered = sanitizeMobileControlsLayout({
+    customized: true,
+    buttons: { left: { x: -5, y: 99 }, right: 'corrupt' },
+  });
+  assert.equal(recovered.customized, true);
+  assert.equal(recovered.buttons.left.x, 0);
+  assert.equal(recovered.buttons.left.y, 1);
+  assert.ok(recovered.buttons.right.x > 0 && recovered.buttons.right.x < 1);
+
+  // Default positions place LEFT < RIGHT < BLAST < JUMP horizontally
+  const defs = getDefaultMobileControlPositions(390, 844);
+  assert.ok(defs.left.x < defs.right.x && defs.right.x < defs.blast.x && defs.blast.x < defs.jump.x);
+});
+
+test('independent multi-touch button tracker supports LEFT+JUMP, RIGHT+JUMP, LEFT+RIGHT, and BLAST without cross-interruption', () => {
+  let state = createMultiTouchButtonState();
+  assert.deepEqual(getActiveControlButtons(state), { left: false, right: false, blast: false, jump: false });
+
+  // 1. LEFT + JUMP simultaneously
+  state = pressMultiTouchButton(state, 'left', 'p:1');
+  state = pressMultiTouchButton(state, 'jump', 'p:2');
+  assert.deepEqual(getActiveControlButtons(state), { left: true, right: false, blast: false, jump: true });
+
+  // Releasing JUMP must NOT interrupt LEFT
+  state = releaseMultiTouchToken(state, 'p:2');
+  assert.deepEqual(getActiveControlButtons(state), { left: true, right: false, blast: false, jump: false });
+
+  // 2. LEFT + RIGHT simultaneously independently detectable
+  state = pressMultiTouchButton(state, 'right', 'p:3');
+  assert.deepEqual(getActiveControlButtons(state), { left: true, right: true, blast: false, jump: false });
+
+  // 3. Add JUMP + BLAST while both LEFT and RIGHT are held
+  state = pressMultiTouchButton(state, 'jump', 'p:4');
+  state = pressMultiTouchButton(state, 'blast', 'p:5');
+  assert.deepEqual(getActiveControlButtons(state), { left: true, right: true, blast: true, jump: true });
+
+  // Releasing LEFT must NOT interrupt RIGHT, JUMP, or BLAST
+  state = releaseMultiTouchToken(state, 'p:1');
+  assert.deepEqual(getActiveControlButtons(state), { left: false, right: true, blast: true, jump: true });
+
+  // Releasing BLAST must NOT interrupt RIGHT + JUMP
+  state = releaseMultiTouchToken(state, 'p:5');
+  assert.deepEqual(getActiveControlButtons(state), { left: false, right: true, blast: false, jump: true });
+
+  // Releasing RIGHT must NOT interrupt JUMP
+  state = releaseMultiTouchToken(state, 'p:3');
+  assert.deepEqual(getActiveControlButtons(state), { left: false, right: false, blast: false, jump: true });
+
+  // Clear all clears cleanly
+  state = clearAllMultiTouchButtons();
+  assert.deepEqual(getActiveControlButtons(state), { left: false, right: false, blast: false, jump: false });
+});
+
+test('mobile orientation enforcement requires Landscape on mobile portrait, allows Landscape Left/Right, and never blocks desktop', () => {
+  // Mobile Landscape viewports -> allowed immediately without rotation gate
+  for (const vp of [
+    { width: 844, height: 390 },
+    { width: 667, height: 375 },
+    { width: 932, height: 430 },
+    { width: 800, height: 360 },
+  ]) {
+    const res = evaluateMobileOrientationState({ ...vp, isMobile: true });
+    assert.equal(res.orientation, 'landscape');
+    assert.equal(res.requiresLandscapeRotation, false);
+  }
+
+  // Mobile Portrait viewports -> triggers Rotate-to-Landscape gate safely
+  for (const vp of [
+    { width: 390, height: 844 },
+    { width: 360, height: 740 },
+    { width: 412, height: 915 },
+  ]) {
+    const res = evaluateMobileOrientationState({ ...vp, isMobile: true });
+    assert.equal(res.orientation, 'portrait');
+    assert.equal(res.requiresLandscapeRotation, true);
+  }
+
+  // Desktop viewports (standard widescreen OR even a tall split-screen desktop window) -> NEVER gated
+  assert.deepEqual(
+    evaluateMobileOrientationState({ width: 1440, height: 900, isMobile: false }),
+    { orientation: 'landscape', requiresLandscapeRotation: false },
+  );
+  assert.deepEqual(
+    evaluateMobileOrientationState({ width: 1920, height: 1080, isMobile: false }),
+    { orientation: 'landscape', requiresLandscapeRotation: false },
+  );
+  assert.deepEqual(
+    evaluateMobileOrientationState({ width: 700, height: 950, isMobile: false }),
+    { orientation: 'portrait', requiresLandscapeRotation: false },
+  );
+});

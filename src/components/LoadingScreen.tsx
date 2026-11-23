@@ -421,7 +421,7 @@ function drawGlowingCube(
  */
 function LoadingColorixLogo() {
   return (
-    <div className="w-full max-w-[340px] sm:max-w-[500px] md:max-w-[650px] px-2 select-none colorix-logo-neon">
+    <div className="w-full max-w-[340px] sm:max-w-[500px] md:max-w-[650px] [@media(max-height:460px)]:max-w-[360px] px-2 select-none colorix-logo-neon">
       <svg
         viewBox="0 0 640 164"
         className="w-full h-auto overflow-visible"
@@ -784,7 +784,7 @@ export function LoadingScreen({
 
       {/* Centered Upper-Middle Content Anchor (Matches Reference Layout) */}
       <div
-        className={`relative z-10 w-full max-w-[700px] px-5 sm:px-6 flex flex-col items-center -mt-10 sm:-mt-12 transition-transform duration-500 ease-out ${
+        className={`relative z-10 w-full max-w-[700px] px-5 sm:px-6 flex flex-col items-center -mt-10 sm:-mt-12 [@media(max-height:460px)]:-mt-5 transition-transform duration-500 ease-out ${
           fadingOut ? 'scale-[1.03]' : 'scale-100'
         }`}
       >
@@ -793,8 +793,8 @@ export function LoadingScreen({
 
         {/* 2. Loading Text Directly Below Logo OR Error Panel */}
         {!errorMessage ? (
-          <div className="w-full max-w-[300px] sm:max-w-[460px] md:max-w-[560px] mt-6 sm:mt-8 flex flex-col items-center">
-            <p className="font-display text-xl sm:text-2xl md:text-[28px] font-semibold tracking-wide text-white mb-3.5 select-none drop-shadow-[0_0_16px_rgba(125,211,252,0.85)]">
+          <div className="w-full max-w-[300px] sm:max-w-[460px] md:max-w-[560px] [@media(max-height:460px)]:max-w-[380px] mt-6 sm:mt-8 [@media(max-height:460px)]:mt-3 flex flex-col items-center">
+            <p className="font-display text-xl sm:text-2xl md:text-[28px] [@media(max-height:460px)]:text-lg font-semibold tracking-wide text-white mb-3.5 [@media(max-height:460px)]:mb-2 select-none drop-shadow-[0_0_16px_rgba(125,211,252,0.85)]">
               <span>Loading</span>
               <span className="inline-block colorix-dot-1">.</span>
               <span className="inline-block colorix-dot-2">.</span>
@@ -808,7 +808,7 @@ export function LoadingScreen({
               aria-valuemin={0}
               aria-valuemax={100}
               aria-valuenow={clampedPercent}
-              className="relative w-full h-8 sm:h-9 md:h-10 rounded-full p-[3px] bg-gradient-to-r from-[#00F0FF] via-[#6366F1] to-[#EC4899] shadow-[0_0_26px_rgba(34,211,238,0.58),0_0_44px_rgba(168,85,247,0.5)]"
+              className="relative w-full h-8 sm:h-9 md:h-10 [@media(max-height:460px)]:h-7 rounded-full p-[3px] bg-gradient-to-r from-[#00F0FF] via-[#6366F1] to-[#EC4899] shadow-[0_0_26px_rgba(34,211,238,0.58),0_0_44px_rgba(168,85,247,0.5)]"
             >
               {/* Dark recessed inner track */}
               <div className="relative w-full h-full rounded-full bg-[#060918] overflow-hidden p-[3px] shadow-inner">

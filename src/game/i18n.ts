@@ -37,6 +37,12 @@ export interface Translations {
   fullscreen: string;
   controls: string;
   touchControls: string;
+  customizeControls: string;
+  customizeControlsHint: string;
+  saveLayout: string;
+  resetToDefault: string;
+  customLayoutLabel: string;
+  defaultLayoutLabel: string;
   language: string;
   resetProgress: string;
   resetConfirmTitle: string;
@@ -97,6 +103,12 @@ const DICTIONARY: Record<LanguageCode, Translations> = {
     fullscreen: 'Fullscreen',
     controls: 'Movement Keys',
     touchControls: 'Touch Controls',
+    customizeControls: 'Customize Controls',
+    customizeControlsHint: 'Drag any button independently to arrange your layout',
+    saveLayout: 'SAVE LAYOUT',
+    resetToDefault: 'RESET TO DEFAULT',
+    customLayoutLabel: 'Custom',
+    defaultLayoutLabel: 'Default',
     language: 'Language',
     resetProgress: 'Reset Progress',
     resetConfirmTitle: 'Reset all progress?',
@@ -155,6 +167,12 @@ const DICTIONARY: Record<LanguageCode, Translations> = {
     fullscreen: 'Pantalla Completa',
     controls: 'Teclas de Movimiento',
     touchControls: 'Controles Táctiles',
+    customizeControls: 'Personalizar Controles',
+    customizeControlsHint: 'Arrastra cada botón de forma independiente',
+    saveLayout: 'GUARDAR DISEÑO',
+    resetToDefault: 'RESTABLECER',
+    customLayoutLabel: 'Personalizado',
+    defaultLayoutLabel: 'Predeterminado',
     language: 'Idioma',
     resetProgress: 'Reiniciar Progreso',
     resetConfirmTitle: '¿Reiniciar todo el progreso?',
@@ -213,6 +231,12 @@ const DICTIONARY: Record<LanguageCode, Translations> = {
     fullscreen: 'Plein Écran',
     controls: 'Touches de Déplacement',
     touchControls: 'Commandes Tactiles',
+    customizeControls: 'Personnaliser les Contrôles',
+    customizeControlsHint: 'Faites glisser chaque bouton indépendamment',
+    saveLayout: 'ENREGISTRER',
+    resetToDefault: 'RÉINITIALISER',
+    customLayoutLabel: 'Personnalisé',
+    defaultLayoutLabel: 'Par défaut',
     language: 'Langue',
     resetProgress: 'Réinitialiser',
     resetConfirmTitle: 'Réinitialiser la progression ?',

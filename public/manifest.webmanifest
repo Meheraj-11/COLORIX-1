@@ -1,0 +1,10 @@
+{
+  "name": "COLORIX – A World Beyond Colors",
+  "short_name": "COLORIX",
+  "description": "A cinematic 2D color-switching puzzle-platformer with 16 selectable colors, 8 atmospheric worlds, and 104 handcrafted puzzle levels.",
+  "start_url": "/",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#0B0D14",
+  "theme_color": "#0B0D14"
+}

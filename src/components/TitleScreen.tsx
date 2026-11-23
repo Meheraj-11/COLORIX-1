@@ -138,7 +138,7 @@ export function TitleScreen({
               type="button"
               data-start="true"
               onClick={onPlayNew}
-              className="w-full py-3.5 px-6 rounded-lg bg-[#F8FAFC] text-[#0B0D14] font-display font-bold text-base tracking-wide hover:bg-white active:scale-[0.99] transition-transform shadow-lg cursor-pointer whitespace-nowrap text-left flex items-center justify-between focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-400"
+              className="w-full py-3.5 [@media(max-height:480px)]:py-2.5 px-6 rounded-lg bg-[#F8FAFC] text-[#0B0D14] font-display font-bold text-base tracking-wide hover:bg-white active:scale-[0.99] transition-transform shadow-lg cursor-pointer whitespace-nowrap text-left flex items-center justify-between focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-400"
             >
               <span>{t.playGame}</span>
               <span className="text-xs font-semibold text-slate-600">Enter</span>
@@ -149,7 +149,7 @@ export function TitleScreen({
             <button
               type="button"
               onClick={onPlayNew}
-              className="w-full py-2.5 px-5 rounded-lg bg-[#111524]/92 border border-white/15 text-slate-100 font-display font-semibold text-sm hover:bg-[#192036] hover:border-white/30 transition-colors cursor-pointer whitespace-nowrap text-left focus-visible:outline-2 focus-visible:outline-cyan-400"
+              className="w-full py-2.5 [@media(max-height:480px)]:py-2 px-5 rounded-lg bg-[#111524]/92 border border-white/15 text-slate-100 font-display font-semibold text-sm hover:bg-[#192036] hover:border-white/30 transition-colors cursor-pointer whitespace-nowrap text-left focus-visible:outline-2 focus-visible:outline-cyan-400"
             >
               {t.playGame} (Level 1)
             </button>
@@ -158,7 +158,7 @@ export function TitleScreen({
           <button
             type="button"
             onClick={onOpenWorldMap}
-            className="w-full py-2.5 px-5 rounded-lg bg-[#111524]/92 border border-white/15 text-slate-100 font-display font-semibold text-sm hover:bg-[#192036] hover:border-white/30 transition-colors cursor-pointer whitespace-nowrap text-left flex items-center justify-between focus-visible:outline-2 focus-visible:outline-cyan-400"
+            className="w-full py-2.5 [@media(max-height:480px)]:py-2 px-5 rounded-lg bg-[#111524]/92 border border-white/15 text-slate-100 font-display font-semibold text-sm hover:bg-[#192036] hover:border-white/30 transition-colors cursor-pointer whitespace-nowrap text-left flex items-center justify-between focus-visible:outline-2 focus-visible:outline-cyan-400"
           >
             <span>{t.levelSelect}</span>
             <span className="font-mono-num text-xs text-slate-400">
@@ -166,7 +166,7 @@ export function TitleScreen({
             </span>
           </button>
 
-          <div className="flex items-center gap-4 pt-2 pl-1">
+          <div className="flex items-center gap-4 pt-2 [@media(max-height:480px)]:pt-1 pl-1">
             <button
               type="button"
               onClick={onOpenSettings}

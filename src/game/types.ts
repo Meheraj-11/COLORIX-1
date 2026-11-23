@@ -1,4 +1,5 @@
 import type { ActiveColor, ColorId } from './colors';
+import type { MobileControlsLayout } from './mobileControlsLayout';
 
 export type WorldId = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
 
@@ -182,6 +183,7 @@ export interface GameSettings {
   touchMode: TouchMode;
   language: LanguageCode;
   fullscreen: boolean;
+  mobileControlsLayout: MobileControlsLayout;
 }
 
 export interface SaveData {

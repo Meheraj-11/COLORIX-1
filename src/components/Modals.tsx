@@ -34,7 +34,7 @@ export function PauseModal({
       aria-modal="true"
       aria-label={t.paused}
     >
-      <div className="w-full max-w-sm rounded-2xl bg-[#0E1320] border border-white/15 p-6 shadow-2xl flex flex-col gap-5">
+      <div className="w-full max-w-sm max-h-[92dvh] overflow-y-auto colorix-scroll rounded-2xl bg-[#0E1320] border border-white/15 p-6 [@media(max-height:460px)]:p-4 shadow-2xl flex flex-col gap-5 [@media(max-height:460px)]:gap-3">
         <div>
           <p className="text-xs font-mono-num text-slate-400">{levelLabel}</p>
           <h2 className="font-display text-2xl font-bold text-white mt-0.5">{t.paused}</h2>
@@ -97,7 +97,7 @@ export function LevelCompleteModal({
       aria-modal="true"
       aria-label={t.levelComplete}
     >
-      <div className="w-full max-w-md rounded-2xl bg-[#0E1320] border border-white/18 p-6 sm:p-7 shadow-2xl flex flex-col gap-5">
+      <div className="w-full max-w-md max-h-[92dvh] overflow-y-auto colorix-scroll rounded-2xl bg-[#0E1320] border border-white/18 p-6 sm:p-7 [@media(max-height:460px)]:p-4 shadow-2xl flex flex-col gap-5 [@media(max-height:460px)]:gap-3">
         <div>
           <p className="text-xs text-slate-400">
             {stats.worldName} · Level {stats.levelId}
@@ -179,6 +179,7 @@ interface SettingsModalProps {
   musicWarning?: string | null;
   retryingMusic?: boolean;
   onRetryMusic?: () => void;
+  onOpenCustomizeControls: () => void;
   onUpdate: (patch: Partial<GameSettings>) => void;
   onResetProgress: () => void;
   onClose: () => void;
@@ -190,6 +191,7 @@ export function SettingsModal({
   musicWarning,
   retryingMusic,
   onRetryMusic,
+  onOpenCustomizeControls,
   onUpdate,
   onResetProgress,
   onClose,
@@ -439,6 +441,24 @@ export function SettingsModal({
           </div>
         </div>
 
+        {/* Customize Mobile Controls Layout */}
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex flex-col">
+            <span className="text-sm text-slate-200">{t.customizeControls}</span>
+            <span className="text-[11px] text-slate-400">
+              {settings.mobileControlsLayout.customized ? t.customLayoutLabel : t.defaultLayoutLabel}
+            </span>
+          </div>
+          <button
+            type="button"
+            data-testid="settings-customize-controls-btn"
+            onClick={onOpenCustomizeControls}
+            className="px-3.5 py-2 rounded-lg bg-cyan-500/16 hover:bg-cyan-500/26 border border-cyan-400/40 text-cyan-100 text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap"
+          >
+            {t.customizeControls}
+          </button>
+        </div>
+
         {/* Language */}
         <div className="flex items-center justify-between gap-4">
           <span className="text-sm text-slate-200">{t.language}</span>
@@ -567,7 +587,7 @@ export function CreditsModal({ t, onClose }: { t: Translations; onClose: () => v
       aria-modal="true"
       aria-label={t.credits}
     >
-      <div className="w-full max-w-md rounded-2xl bg-[#0E1320] border border-white/15 p-6 shadow-2xl flex flex-col gap-5">
+      <div className="w-full max-w-md max-h-[92dvh] overflow-y-auto colorix-scroll rounded-2xl bg-[#0E1320] border border-white/15 p-6 [@media(max-height:460px)]:p-4 shadow-2xl flex flex-col gap-5 [@media(max-height:460px)]:gap-3">
         <div className="flex items-center justify-between">
           <h2 className="font-display text-2xl font-bold text-white">{t.credits}</h2>
           <button

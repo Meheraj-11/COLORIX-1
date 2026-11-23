@@ -2,16 +2,18 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { COLOR_MAP, VOID_COLOR, type ActiveColor } from '../game/colors';
 import type { Translations } from '../game/i18n';
 import {
-  clearDirectionalHold,
-  createDirectionalHoldState,
-  getDirectionalHoldOutput,
-  pressDirectionalHold,
-  releaseDirectionalHoldToken,
-  type DirectionalHoldOutput,
-  type DirectionalHoldState,
-  type MoveDirection,
-  type ViewportOrientation,
-} from '../game/mobileLayout';
+  clearAllMultiTouchButtons,
+  createMultiTouchButtonState,
+  getActiveControlButtons,
+  pressMultiTouchButton,
+  releaseMultiTouchToken,
+  resolveMobileControlRects,
+  type ActiveControlButtons,
+  type MobileControlButtonId,
+  type MobileControlsLayout,
+  type MultiTouchButtonState,
+} from '../game/mobileControlsLayout';
+import type { ViewportOrientation } from '../game/mobileLayout';
 import type { HudSnapshot } from '../game/types';
 import { BlastIcon, CrystalIcon, PauseIcon, RestartIcon, SoundIcon, WheelIcon } from './Icons';
 
@@ -22,6 +24,7 @@ interface GameHudProps {
   isMobile: boolean;
   orientation: ViewportOrientation;
   showTouchControls: boolean;
+  customControlsLayout: MobileControlsLayout;
   checkpointBanner: boolean;
   onSelectColor: (color: ActiveColor) => void;
   onOpenWheel: () => void;
@@ -48,6 +51,7 @@ export function GameHud({
   isMobile,
   orientation,
   showTouchControls,
+  customControlsLayout,
   checkpointBanner,
   onSelectColor,
   onOpenWheel,
@@ -67,38 +71,72 @@ export function GameHud({
   const blastFillPct = Math.round((1 - hud.blastCooldownRatio) * 100);
   const blastBoltHex = activeColorDef ? activeColorDef.hex : '#93C5FD';
 
-  // Multi-touch pointer & touch hold tracking to guarantee continuous hold-to-move,
-  // immediate release (even outside button bounds), zero stuck inputs, and zero simultaneous L+R.
+  // Reactive viewport dimensions for responsive custom mobile layout clamping
+  const [viewportSize, setViewportSize] = useState<{ w: number; h: number }>(() => ({
+    w: typeof window !== 'undefined' ? window.innerWidth || 390 : 390,
+    h: typeof window !== 'undefined' ? window.innerHeight || 844 : 844,
+  }));
+
+  useEffect(() => {
+    const syncSize = () => {
+      setViewportSize({
+        w: Math.max(240, window.innerWidth || 390),
+        h: Math.max(240, window.innerHeight || 844),
+      });
+    };
+    window.addEventListener('resize', syncSize);
+    window.addEventListener('orientationchange', syncSize);
+    window.visualViewport?.addEventListener('resize', syncSize);
+    return () => {
+      window.removeEventListener('resize', syncSize);
+      window.removeEventListener('orientationchange', syncSize);
+      window.visualViewport?.removeEventListener('resize', syncSize);
+    };
+  }, []);
+
+  // Independent per-button multi-touch tracking:
+  // LEFT + JUMP, RIGHT + JUMP, LEFT + RIGHT, and BLAST all track their own pointer/touch IDs
+  // so releasing one button NEVER interrupts another active button.
   const touchCallbacksRef = useRef({
     onTouchLeft,
     onTouchRight,
     onTouchJumpDown,
     onTouchJumpUp,
+    onTriggerBlast,
   });
   touchCallbacksRef.current = {
     onTouchLeft,
     onTouchRight,
     onTouchJumpDown,
     onTouchJumpUp,
+    onTriggerBlast,
   };
 
-  const holdStateRef = useRef<DirectionalHoldState>(createDirectionalHoldState());
-  const lastAppliedOutputRef = useRef<DirectionalHoldOutput>({
+  const multiTouchRef = useRef<MultiTouchButtonState>(createMultiTouchButtonState());
+  const lastAppliedButtonsRef = useRef<ActiveControlButtons>({
     left: false,
     right: false,
-    activeDir: null,
+    blast: false,
+    jump: false,
   });
   const capturedPointersRef = useRef<Set<number>>(new Set());
-  const lastPointerDownTimeRef = useRef<number>(0);
+  const lastPointerDownByBtnRef = useRef<Record<MobileControlButtonId, number>>({
+    left: 0,
+    right: 0,
+    blast: 0,
+    jump: 0,
+  });
 
-  const jumpPointerIdRef = useRef<number | null>(null);
-  const jumpTouchIdRef = useRef<number | null>(null);
-  const [pressedDir, setPressedDir] = useState<MoveDirection | null>(null);
-  const [jumpPressed, setJumpPressed] = useState(false);
+  const [activeBtns, setActiveBtns] = useState<ActiveControlButtons>({
+    left: false,
+    right: false,
+    blast: false,
+    jump: false,
+  });
 
-  const syncDirectionalOutput = useCallback((force = false) => {
-    const next = getDirectionalHoldOutput(holdStateRef.current);
-    const prev = lastAppliedOutputRef.current;
+  const syncMultiTouchOutputs = useCallback((force = false) => {
+    const next = getActiveControlButtons(multiTouchRef.current);
+    const prev = lastAppliedButtonsRef.current;
 
     if (force || next.left !== prev.left) {
       touchCallbacksRef.current.onTouchLeft(next.left);
@@ -106,32 +144,40 @@ export function GameHud({
     if (force || next.right !== prev.right) {
       touchCallbacksRef.current.onTouchRight(next.right);
     }
-    if (force || next.activeDir !== prev.activeDir) {
-      setPressedDir(next.activeDir);
+    if (next.jump && !prev.jump) {
+      touchCallbacksRef.current.onTouchJumpDown();
+    } else if ((force && !next.jump) || (!next.jump && prev.jump)) {
+      touchCallbacksRef.current.onTouchJumpUp();
     }
-    lastAppliedOutputRef.current = next;
+
+    if (
+      force ||
+      next.left !== prev.left ||
+      next.right !== prev.right ||
+      next.blast !== prev.blast ||
+      next.jump !== prev.jump
+    ) {
+      setActiveBtns(next);
+    }
+    lastAppliedButtonsRef.current = next;
   }, []);
 
   const releaseAllTouchInputs = useCallback(() => {
-    holdStateRef.current = clearDirectionalHold();
+    multiTouchRef.current = clearAllMultiTouchButtons();
     capturedPointersRef.current.clear();
-    syncDirectionalOutput(true);
-    jumpPointerIdRef.current = null;
-    jumpTouchIdRef.current = null;
-    setJumpPressed(false);
-    touchCallbacksRef.current.onTouchJumpUp();
-  }, [syncDirectionalOutput]);
+    syncMultiTouchOutputs(true);
+  }, [syncMultiTouchOutputs]);
 
   const releasePointerToken = useCallback(
     (pointerId: number) => {
       capturedPointersRef.current.delete(pointerId);
-      const next = releaseDirectionalHoldToken(holdStateRef.current, `p:${pointerId}`);
-      if (next !== holdStateRef.current) {
-        holdStateRef.current = next;
-        syncDirectionalOutput();
+      const next = releaseMultiTouchToken(multiTouchRef.current, `p:${pointerId}`);
+      if (next !== multiTouchRef.current) {
+        multiTouchRef.current = next;
+        syncMultiTouchOutputs();
       }
     },
-    [syncDirectionalOutput],
+    [syncMultiTouchOutputs],
   );
 
   // Clear touch inputs ONLY when touch controls actually hide, window loses focus, tab backgrounds,
@@ -144,30 +190,16 @@ export function GameHud({
 
     const handleGlobalPointerEnd = (e: PointerEvent) => {
       releasePointerToken(e.pointerId);
-      if (jumpPointerIdRef.current === e.pointerId) {
-        jumpPointerIdRef.current = null;
-        setJumpPressed(false);
-        touchCallbacksRef.current.onTouchJumpUp();
-      }
     };
 
     const handleGlobalTouchEnd = (e: TouchEvent) => {
-      let changed = false;
+      let next = multiTouchRef.current;
       for (let i = 0; i < e.changedTouches.length; i += 1) {
-        const tid = e.changedTouches[i].identifier;
-        const next = releaseDirectionalHoldToken(holdStateRef.current, `t:${tid}`);
-        if (next !== holdStateRef.current) {
-          holdStateRef.current = next;
-          changed = true;
-        }
-        if (jumpTouchIdRef.current === tid) {
-          jumpTouchIdRef.current = null;
-          setJumpPressed(false);
-          touchCallbacksRef.current.onTouchJumpUp();
-        }
+        next = releaseMultiTouchToken(next, `t:${e.changedTouches[i].identifier}`);
       }
-      if (changed) {
-        syncDirectionalOutput();
+      if (next !== multiTouchRef.current) {
+        multiTouchRef.current = next;
+        syncMultiTouchOutputs();
       }
     };
 
@@ -199,7 +231,7 @@ export function GameHud({
       document.removeEventListener('visibilitychange', handleVis);
       releaseAllTouchInputs();
     };
-  }, [showTouchControls, releaseAllTouchInputs, releasePointerToken, syncDirectionalOutput]);
+  }, [showTouchControls, releaseAllTouchInputs, releasePointerToken, syncMultiTouchOutputs]);
 
   // Keep button visual pressed state synchronized when player death clears engine inputs
   useEffect(() => {
@@ -212,12 +244,12 @@ export function GameHud({
     e.preventDefault();
   }, []);
 
-  const handleDirPointerDown = useCallback(
-    (direction: MoveDirection, e: React.PointerEvent<HTMLButtonElement>) => {
+  const handleControlPointerDown = useCallback(
+    (buttonId: MobileControlButtonId, e: React.PointerEvent<HTMLButtonElement>) => {
       if (e.pointerType === 'mouse' && e.button !== 0) return;
       e.preventDefault();
       e.stopPropagation();
-      lastPointerDownTimeRef.current = performance.now();
+      lastPointerDownByBtnRef.current[buttonId] = performance.now();
 
       try {
         e.currentTarget.setPointerCapture(e.pointerId);
@@ -231,24 +263,28 @@ export function GameHud({
         // Synthetic pointer events without active pointerId can safely skip capture
       }
 
-      holdStateRef.current = pressDirectionalHold(
-        holdStateRef.current,
-        direction,
+      if (buttonId === 'blast') {
+        touchCallbacksRef.current.onTriggerBlast();
+      }
+
+      multiTouchRef.current = pressMultiTouchButton(
+        multiTouchRef.current,
+        buttonId,
         `p:${e.pointerId}`,
       );
-      syncDirectionalOutput();
+      syncMultiTouchOutputs();
     },
-    [syncDirectionalOutput],
+    [syncMultiTouchOutputs],
   );
 
-  const handleDirPointerEnd = useCallback(
+  const handleControlPointerEnd = useCallback(
     (e: React.PointerEvent<HTMLButtonElement>) => {
       releasePointerToken(e.pointerId);
     },
     [releasePointerToken],
   );
 
-  const handleDirPointerLeave = useCallback(
+  const handleControlPointerLeave = useCallback(
     (e: React.PointerEvent<HTMLButtonElement>) => {
       const hasNativeCapture =
         capturedPointersRef.current.has(e.pointerId) &&
@@ -261,70 +297,52 @@ export function GameHud({
     [releasePointerToken],
   );
 
-  const handleDirTouchStart = useCallback(
-    (direction: MoveDirection, e: React.TouchEvent<HTMLButtonElement>) => {
+  const handleControlTouchStart = useCallback(
+    (buttonId: MobileControlButtonId, e: React.TouchEvent<HTMLButtonElement>) => {
       e.stopPropagation();
-      // If PointerEvents already handled this press moments ago, avoid duplicate touch token registration
-      if (performance.now() - lastPointerDownTimeRef.current < 80) {
+      // Per-button deduplication: if PointerEvents already handled this exact button press moments ago,
+      // skip duplicate touch token registration without blocking other fingers on other buttons.
+      if (performance.now() - lastPointerDownByBtnRef.current[buttonId] < 80) {
         return;
       }
-      let next = holdStateRef.current;
-      for (let i = 0; i < e.changedTouches.length; i += 1) {
-        next = pressDirectionalHold(next, direction, `t:${e.changedTouches[i].identifier}`);
+
+      if (buttonId === 'blast') {
+        touchCallbacksRef.current.onTriggerBlast();
       }
-      holdStateRef.current = next;
-      syncDirectionalOutput();
+
+      let next = multiTouchRef.current;
+      for (let i = 0; i < e.changedTouches.length; i += 1) {
+        next = pressMultiTouchButton(next, buttonId, `t:${e.changedTouches[i].identifier}`);
+      }
+      multiTouchRef.current = next;
+      syncMultiTouchOutputs();
     },
-    [syncDirectionalOutput],
+    [syncMultiTouchOutputs],
   );
 
-  const handleDirTouchEnd = useCallback(
+  const handleControlTouchEnd = useCallback(
     (e: React.TouchEvent<HTMLButtonElement>) => {
-      let next = holdStateRef.current;
+      let next = multiTouchRef.current;
       for (let i = 0; i < e.changedTouches.length; i += 1) {
-        next = releaseDirectionalHoldToken(next, `t:${e.changedTouches[i].identifier}`);
+        next = releaseMultiTouchToken(next, `t:${e.changedTouches[i].identifier}`);
       }
-      if (next !== holdStateRef.current) {
-        holdStateRef.current = next;
-        syncDirectionalOutput();
+      if (next !== multiTouchRef.current) {
+        multiTouchRef.current = next;
+        syncMultiTouchOutputs();
       }
     },
-    [syncDirectionalOutput],
+    [syncMultiTouchOutputs],
   );
 
-  const handleDirTouchCancel = useCallback(
+  const handleControlTouchCancel = useCallback(
     (e: React.TouchEvent<HTMLButtonElement>) => {
-      handleDirTouchEnd(e);
+      handleControlTouchEnd(e);
       if (e.touches.length === 0) {
-        holdStateRef.current = clearDirectionalHold();
-        capturedPointersRef.current.clear();
-        syncDirectionalOutput(true);
+        releaseAllTouchInputs();
       }
     },
-    [handleDirTouchEnd, syncDirectionalOutput],
+    [handleControlTouchEnd, releaseAllTouchInputs],
   );
-
-  const handleJumpDown = useCallback((e: React.PointerEvent<HTMLButtonElement>) => {
-    if (e.pointerType === 'mouse' && e.button !== 0) return;
-    e.preventDefault();
-    e.stopPropagation();
-    if (jumpPointerIdRef.current !== null && jumpPointerIdRef.current !== e.pointerId) return;
-    jumpPointerIdRef.current = e.pointerId;
-    try {
-      e.currentTarget.setPointerCapture(e.pointerId);
-    } catch {
-      // Ignore synthetic event capture errors
-    }
-    setJumpPressed(true);
-    touchCallbacksRef.current.onTouchJumpDown();
-  }, []);
-
-  const handleJumpUp = useCallback((e: React.PointerEvent<HTMLButtonElement>) => {
-    if (jumpPointerIdRef.current !== e.pointerId) return;
-    jumpPointerIdRef.current = null;
-    setJumpPressed(false);
-    touchCallbacksRef.current.onTouchJumpUp();
-  }, []);
 
   // Reusable preserved Quick Color Dock ([1][2][3]... | [Wheel 16]) matching the visual identity
   const renderColorDock = (compactMobile: boolean) => {
@@ -444,7 +462,7 @@ export function GameHud({
     );
   };
 
-  // Reusable Ergonomic Mobile Touch Controls Row (unified directional pad + independent BLAST/JUMP)
+  // Reusable Ergonomic Mobile Touch Controls (Default layout OR player's saved Custom layout)
   const renderTouchControls = () => {
     const isLandscape = isMobile && orientation === 'landscape';
     const arrowBtnClass = isLandscape
@@ -457,9 +475,172 @@ export function GameHud({
       ? 'w-[60px] h-[60px] rounded-2xl text-xs'
       : 'w-16 h-16 min-[400px]:w-[68px] min-[400px]:h-[68px] rounded-2xl text-sm';
 
+    const customRects = customControlsLayout.customized
+      ? resolveMobileControlRects(customControlsLayout.buttons, viewportSize.w, viewportSize.h)
+      : null;
+
+    const getCustomPosStyle = (id: MobileControlButtonId): React.CSSProperties | undefined => {
+      if (!customRects) return undefined;
+      const r = customRects[id];
+      return {
+        position: 'fixed',
+        left: `${r.left}px`,
+        top: `${r.top}px`,
+        width: `${r.w}px`,
+        height: `${r.h}px`,
+      };
+    };
+
+    const leftButton = (
+      <button
+        type="button"
+        tabIndex={-1}
+        data-testid="mobile-left-btn"
+        aria-label="Move Left"
+        aria-pressed={activeBtns.left}
+        draggable={false}
+        onContextMenu={preventContextMenu}
+        onPointerDown={(e) => handleControlPointerDown('left', e)}
+        onPointerUp={handleControlPointerEnd}
+        onPointerCancel={handleControlPointerEnd}
+        onPointerLeave={handleControlPointerLeave}
+        onLostPointerCapture={handleControlPointerEnd}
+        onTouchStart={(e) => handleControlTouchStart('left', e)}
+        onTouchEnd={handleControlTouchEnd}
+        onTouchCancel={handleControlTouchCancel}
+        style={getCustomPosStyle('left')}
+        className={`${arrowBtnClass} pointer-events-auto border text-white font-bold flex items-center justify-center transition-transform select-none touch-none shadow-lg ${
+          activeBtns.left
+            ? 'bg-white/25 border-white/60 scale-95'
+            : 'bg-[#0D111C]/88 border-white/24'
+        }`}
+      >
+        ←
+      </button>
+    );
+
+    const rightButton = (
+      <button
+        type="button"
+        tabIndex={-1}
+        data-testid="mobile-right-btn"
+        aria-label="Move Right"
+        aria-pressed={activeBtns.right}
+        draggable={false}
+        onContextMenu={preventContextMenu}
+        onPointerDown={(e) => handleControlPointerDown('right', e)}
+        onPointerUp={handleControlPointerEnd}
+        onPointerCancel={handleControlPointerEnd}
+        onPointerLeave={handleControlPointerLeave}
+        onLostPointerCapture={handleControlPointerEnd}
+        onTouchStart={(e) => handleControlTouchStart('right', e)}
+        onTouchEnd={handleControlTouchEnd}
+        onTouchCancel={handleControlTouchCancel}
+        style={getCustomPosStyle('right')}
+        className={`${arrowBtnClass} pointer-events-auto border text-white font-bold flex items-center justify-center transition-transform select-none touch-none shadow-lg ${
+          activeBtns.right
+            ? 'bg-white/25 border-white/60 scale-95'
+            : 'bg-[#0D111C]/88 border-white/24'
+        }`}
+      >
+        →
+      </button>
+    );
+
+    const blastStyle: React.CSSProperties = {
+      ...(getCustomPosStyle('blast') ?? {}),
+      ...(blastReady ? { borderColor: blastBoltHex } : {}),
+    };
+
+    const blastButton = (
+      <button
+        type="button"
+        tabIndex={-1}
+        data-testid="mobile-blast-btn"
+        aria-label={t.colorBlast}
+        aria-pressed={activeBtns.blast}
+        draggable={false}
+        onContextMenu={preventContextMenu}
+        onPointerDown={(e) => handleControlPointerDown('blast', e)}
+        onPointerUp={handleControlPointerEnd}
+        onPointerCancel={handleControlPointerEnd}
+        onPointerLeave={handleControlPointerLeave}
+        onLostPointerCapture={handleControlPointerEnd}
+        onTouchStart={(e) => handleControlTouchStart('blast', e)}
+        onTouchEnd={handleControlTouchEnd}
+        onTouchCancel={handleControlTouchCancel}
+        disabled={!blastReady}
+        className={`relative overflow-hidden ${blastBtnClass} pointer-events-auto border-2 font-display font-bold flex flex-col items-center justify-center gap-0.5 select-none touch-none shadow-lg transition-transform ${
+          blastReady
+            ? activeBtns.blast
+              ? 'bg-[#0D111C]/92 text-white scale-95'
+              : 'bg-[#0D111C]/92 text-white active:scale-95'
+            : 'bg-[#0D111C]/72 text-slate-400 border-white/18'
+        }`}
+        style={Object.keys(blastStyle).length > 0 ? blastStyle : undefined}
+      >
+        <span
+          aria-hidden="true"
+          className="absolute bottom-0 left-0 h-1 transition-[width] duration-75"
+          style={{
+            width: `${blastFillPct}%`,
+            backgroundColor: blastBoltHex,
+          }}
+        />
+        <BlastIcon color={blastReady ? blastBoltHex : '#64748B'} size={isLandscape ? 16 : 18} />
+        <span className="leading-none">
+          {blastReady ? 'BLAST' : `${hud.blastCooldownSec.toFixed(1)}s`}
+        </span>
+      </button>
+    );
+
+    const jumpButton = (
+      <button
+        type="button"
+        tabIndex={-1}
+        data-testid="mobile-jump-btn"
+        aria-label="Jump"
+        aria-pressed={activeBtns.jump}
+        draggable={false}
+        onContextMenu={preventContextMenu}
+        onPointerDown={(e) => handleControlPointerDown('jump', e)}
+        onPointerUp={handleControlPointerEnd}
+        onPointerCancel={handleControlPointerEnd}
+        onPointerLeave={handleControlPointerLeave}
+        onLostPointerCapture={handleControlPointerEnd}
+        onTouchStart={(e) => handleControlTouchStart('jump', e)}
+        onTouchEnd={handleControlTouchEnd}
+        onTouchCancel={handleControlTouchCancel}
+        style={getCustomPosStyle('jump')}
+        className={`${jumpBtnClass} pointer-events-auto bg-[#F8FAFC]/94 border-2 border-white text-[#0B0D14] font-display font-bold flex items-center justify-center select-none touch-none shadow-lg transition-transform ${
+          activeBtns.jump ? 'scale-95 bg-white' : ''
+        }`}
+      >
+        JUMP
+      </button>
+    );
+
+    // Custom saved layout: every control positioned independently at player's exact saved coordinates
+    if (customControlsLayout.customized) {
+      return (
+        <div
+          data-testid="mobile-touch-controls"
+          data-layout-mode="custom"
+          className="fixed inset-0 pointer-events-none select-none z-20"
+        >
+          {leftButton}
+          {rightButton}
+          {blastButton}
+          {jumpButton}
+        </div>
+      );
+    }
+
+    // Exact original default bottom row layout (pixel-identical)
     return (
       <div
         data-testid="mobile-touch-controls"
+        data-layout-mode="default"
         className="flex items-end justify-between gap-2 w-full pointer-events-none select-none"
       >
         {/* Left / Right Mobile Hold-to-Move Directional Buttons (exact existing styling preserved) */}
@@ -470,110 +651,14 @@ export function GameHud({
           role="group"
           aria-label="Movement controls"
         >
-          <button
-            type="button"
-            tabIndex={-1}
-            data-testid="mobile-left-btn"
-            aria-label="Move Left"
-            aria-pressed={pressedDir === 'left'}
-            draggable={false}
-            onContextMenu={preventContextMenu}
-            onPointerDown={(e) => handleDirPointerDown('left', e)}
-            onPointerUp={handleDirPointerEnd}
-            onPointerCancel={handleDirPointerEnd}
-            onPointerLeave={handleDirPointerLeave}
-            onLostPointerCapture={handleDirPointerEnd}
-            onTouchStart={(e) => handleDirTouchStart('left', e)}
-            onTouchEnd={handleDirTouchEnd}
-            onTouchCancel={handleDirTouchCancel}
-            className={`${arrowBtnClass} border text-white font-bold flex items-center justify-center transition-transform select-none touch-none shadow-lg ${
-              pressedDir === 'left'
-                ? 'bg-white/25 border-white/60 scale-95'
-                : 'bg-[#0D111C]/88 border-white/24'
-            }`}
-          >
-            ←
-          </button>
-          <button
-            type="button"
-            tabIndex={-1}
-            data-testid="mobile-right-btn"
-            aria-label="Move Right"
-            aria-pressed={pressedDir === 'right'}
-            draggable={false}
-            onContextMenu={preventContextMenu}
-            onPointerDown={(e) => handleDirPointerDown('right', e)}
-            onPointerUp={handleDirPointerEnd}
-            onPointerCancel={handleDirPointerEnd}
-            onPointerLeave={handleDirPointerLeave}
-            onLostPointerCapture={handleDirPointerEnd}
-            onTouchStart={(e) => handleDirTouchStart('right', e)}
-            onTouchEnd={handleDirTouchEnd}
-            onTouchCancel={handleDirTouchCancel}
-            className={`${arrowBtnClass} border text-white font-bold flex items-center justify-center transition-transform select-none touch-none shadow-lg ${
-              pressedDir === 'right'
-                ? 'bg-white/25 border-white/60 scale-95'
-                : 'bg-[#0D111C]/88 border-white/24'
-            }`}
-          >
-            →
-          </button>
+          {leftButton}
+          {rightButton}
         </div>
 
         {/* Right Action Cluster: Dedicated Mobile Color Blast + Jump with ergonomic spacing */}
         <div className="flex items-end gap-3.5 pointer-events-auto touch-none select-none">
-          <button
-            type="button"
-            tabIndex={-1}
-            data-testid="mobile-blast-btn"
-            aria-label={t.colorBlast}
-            draggable={false}
-            onContextMenu={preventContextMenu}
-            onPointerDown={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              onTriggerBlast();
-            }}
-            disabled={!blastReady}
-            className={`relative overflow-hidden ${blastBtnClass} border-2 font-display font-bold flex flex-col items-center justify-center gap-0.5 select-none touch-none shadow-lg transition-transform ${
-              blastReady
-                ? 'bg-[#0D111C]/92 text-white active:scale-95'
-                : 'bg-[#0D111C]/72 text-slate-400 border-white/18'
-            }`}
-            style={blastReady ? { borderColor: blastBoltHex } : undefined}
-          >
-            <span
-              aria-hidden="true"
-              className="absolute bottom-0 left-0 h-1 transition-[width] duration-75"
-              style={{
-                width: `${blastFillPct}%`,
-                backgroundColor: blastBoltHex,
-              }}
-            />
-            <BlastIcon color={blastReady ? blastBoltHex : '#64748B'} size={isLandscape ? 16 : 18} />
-            <span className="leading-none">
-              {blastReady ? 'BLAST' : `${hud.blastCooldownSec.toFixed(1)}s`}
-            </span>
-          </button>
-
-          <button
-            type="button"
-            tabIndex={-1}
-            data-testid="mobile-jump-btn"
-            aria-label="Jump"
-            aria-pressed={jumpPressed}
-            draggable={false}
-            onContextMenu={preventContextMenu}
-            onPointerDown={handleJumpDown}
-            onPointerUp={handleJumpUp}
-            onPointerCancel={handleJumpUp}
-            onLostPointerCapture={handleJumpUp}
-            className={`${jumpBtnClass} bg-[#F8FAFC]/94 border-2 border-white text-[#0B0D14] font-display font-bold flex items-center justify-center select-none touch-none shadow-lg transition-transform ${
-              jumpPressed ? 'scale-95 bg-white' : ''
-            }`}
-          >
-            JUMP
-          </button>
+          {blastButton}
+          {jumpButton}
         </div>
       </div>
     );

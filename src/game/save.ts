@@ -1,3 +1,8 @@
+import {
+  createDefaultMobileControlsLayout,
+  DEFAULT_MOBILE_CONTROLS_LAYOUT,
+  sanitizeMobileControlsLayout,
+} from './mobileControlsLayout';
 import type { GameSettings, SaveData } from './types';
 
 export const SAVE_STORAGE_KEY = 'colorix_save_v1';
@@ -15,6 +20,7 @@ export const DEFAULT_SETTINGS: GameSettings = {
   touchMode: 'auto',
   language: 'en',
   fullscreen: false,
+  mobileControlsLayout: DEFAULT_MOBILE_CONTROLS_LAYOUT,
 };
 
 export function createDefaultSave(): SaveData {
@@ -26,7 +32,10 @@ export function createDefaultSave(): SaveData {
     collectedCrystals: {},
     bestTimes: {},
     totalDeaths: 0,
-    settings: { ...DEFAULT_SETTINGS },
+    settings: {
+      ...DEFAULT_SETTINGS,
+      mobileControlsLayout: createDefaultMobileControlsLayout(),
+    },
   };
 }
 
@@ -114,6 +123,7 @@ export function sanitizeSaveData(raw: unknown): SaveData {
         ? rawSettings.language
         : DEFAULT_SETTINGS.language,
     fullscreen: typeof rawSettings.fullscreen === 'boolean' ? rawSettings.fullscreen : false,
+    mobileControlsLayout: sanitizeMobileControlsLayout(rawSettings.mobileControlsLayout),
   };
 
   return {

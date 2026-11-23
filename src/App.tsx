@@ -1,7 +1,9 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ColorWheel } from './components/ColorWheel';
 import { GameHud } from './components/GameHud';
+import { LandscapeGateOverlay } from './components/LandscapeGateOverlay';
 import { LoadingScreen } from './components/LoadingScreen';
+import { MobileControlsCustomizer } from './components/MobileControlsCustomizer';
 import {
   CreditsModal,
   HowToPlayModal,
@@ -37,6 +39,12 @@ import {
   recordLevelCompletion,
 } from './game/save';
 import { computeMobileViewportProfile, type MobileViewportProfile } from './game/mobileLayout';
+import {
+  evaluateMobileOrientationState,
+  requestFullscreenLandscape,
+  subscribeNativeAndroidBackButton,
+  tryLockLandscapeOrientation,
+} from './game/orientation';
 import type {
   AppScreen,
   GameSettings,
@@ -46,28 +54,44 @@ import type {
   SaveData,
 } from './game/types';
 
-function readViewportProfile(quality: GraphicsQuality): MobileViewportProfile {
+interface ViewportSnapshot {
+  profile: MobileViewportProfile;
+  width: number;
+  height: number;
+}
+
+function readViewportSnapshot(quality: GraphicsQuality): ViewportSnapshot {
   if (typeof window === 'undefined') {
-    return computeMobileViewportProfile({
+    return {
       width: 1280,
       height: 720,
-      devicePixelRatio: 1,
-      isTouchDevice: false,
-      graphicsQuality: quality,
-    });
+      profile: computeMobileViewportProfile({
+        width: 1280,
+        height: 720,
+        devicePixelRatio: 1,
+        isTouchDevice: false,
+        graphicsQuality: quality,
+      }),
+    };
   }
+  const width = window.innerWidth;
+  const height = window.innerHeight;
   const isTouchDevice =
     'ontouchstart' in window ||
     navigator.maxTouchPoints > 0 ||
     Boolean(window.matchMedia?.('(pointer: coarse)').matches);
-  return computeMobileViewportProfile({
-    width: window.innerWidth,
-    height: window.innerHeight,
-    devicePixelRatio: window.devicePixelRatio || 1,
-    isTouchDevice,
-    hardwareConcurrency: navigator.hardwareConcurrency,
-    graphicsQuality: quality,
-  });
+  return {
+    width,
+    height,
+    profile: computeMobileViewportProfile({
+      width,
+      height,
+      devicePixelRatio: window.devicePixelRatio || 1,
+      isTouchDevice,
+      hardwareConcurrency: navigator.hardwareConcurrency,
+      graphicsQuality: quality,
+    }),
+  };
 }
 
 export default function App() {
@@ -87,12 +111,32 @@ export default function App() {
   wheelOpenRef.current = wheelOpen;
 
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const settingsOpenRef = useRef(settingsOpen);
+  settingsOpenRef.current = settingsOpen;
+
+  const [customizingControls, setCustomizingControls] = useState(false);
+  const customizingControlsRef = useRef(customizingControls);
+  customizingControlsRef.current = customizingControls;
+
   const [howToPlayOpen, setHowToPlayOpen] = useState(false);
+  const howToPlayOpenRef = useRef(howToPlayOpen);
+  howToPlayOpenRef.current = howToPlayOpen;
+
   const [creditsOpen, setCreditsOpen] = useState(false);
+  const creditsOpenRef = useRef(creditsOpen);
+  creditsOpenRef.current = creditsOpen;
+
   const [checkpointBanner, setCheckpointBanner] = useState(false);
-  const [viewportProfile, setViewportProfile] = useState<MobileViewportProfile>(() =>
-    readViewportProfile(save.settings.graphicsQuality),
+  const [viewportSnapshot, setViewportSnapshot] = useState<ViewportSnapshot>(() =>
+    readViewportSnapshot(save.settings.graphicsQuality),
   );
+  const viewportProfile = viewportSnapshot.profile;
+  const orientationState = evaluateMobileOrientationState({
+    width: viewportSnapshot.width,
+    height: viewportSnapshot.height,
+    isMobile: viewportProfile.isMobile,
+  });
+  const pausedByPortraitRef = useRef<boolean>(false);
 
   const [hud, setHud] = useState<HudSnapshot | null>(null);
   const [completeStats, setCompleteStats] = useState<LevelCompleteStats | null>(null);
@@ -159,7 +203,7 @@ export default function App() {
 
   // Responsive mobile viewport & orientation detection on resize / orientation change
   useEffect(() => {
-    const syncProfile = () => setViewportProfile(readViewportProfile(saveRef.current.settings.graphicsQuality));
+    const syncProfile = () => setViewportSnapshot(readViewportSnapshot(saveRef.current.settings.graphicsQuality));
     syncProfile();
     window.addEventListener('resize', syncProfile);
     window.addEventListener('orientationchange', syncProfile);
@@ -170,6 +214,44 @@ export default function App() {
       window.visualViewport?.removeEventListener('resize', syncProfile);
     };
   }, [save.settings.graphicsQuality]);
+
+  // Enforce Landscape orientation on mobile devices via Capacitor / Web Screen Orientation API
+  useEffect(() => {
+    if (!viewportProfile.isMobile) return;
+    void tryLockLandscapeOrientation();
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        void tryLockLandscapeOrientation();
+      }
+    };
+    const onFirstGesture = () => {
+      void tryLockLandscapeOrientation();
+    };
+
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    window.addEventListener('pointerdown', onFirstGesture, { passive: true, once: true });
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      window.removeEventListener('pointerdown', onFirstGesture);
+    };
+  }, [viewportProfile.isMobile]);
+
+  // Auto-pause active gameplay while mobile Portrait rotation gate is visible and resume seamlessly in Landscape
+  useEffect(() => {
+    if (orientationState.requiresLandscapeRotation) {
+      engineRef.current?.clearInputs();
+      if (screen === 'playing' && !pausedByPortraitRef.current) {
+        engineRef.current?.setPaused(true);
+        pausedByPortraitRef.current = true;
+      }
+    } else if (pausedByPortraitRef.current) {
+      pausedByPortraitRef.current = false;
+      if (screen === 'playing') {
+        engineRef.current?.setPaused(false);
+      }
+    }
+  }, [orientationState.requiresLandscapeRotation, screen]);
 
   // Clear held movement inputs whenever the 16-Color Wheel opens so mobile touches never stick
   useEffect(() => {
@@ -182,8 +264,10 @@ export default function App() {
     audioManager.unlock();
     const owned = countTotalCollectedCrystals(saveRef.current);
     runCrystalBufferRef.current = [];
+    pausedByPortraitRef.current = false;
     setWheelOpen(false);
     setSettingsOpen(false);
+    setCustomizingControls(false);
     setHowToPlayOpen(false);
     setCreditsOpen(false);
     setCompleteStats(null);
@@ -197,8 +281,10 @@ export default function App() {
   }, []);
 
   const returnToTitle = useCallback(() => {
+    pausedByPortraitRef.current = false;
     setWheelOpen(false);
     setSettingsOpen(false);
+    setCustomizingControls(false);
     setCompleteStats(null);
     setScreen('title');
     audioManager.setAmbientMode('menu', 1);
@@ -216,6 +302,7 @@ export default function App() {
       audioManager.setAmbientMode('paused');
     } else if (screenRef.current === 'paused') {
       setSettingsOpen(false);
+      setCustomizingControls(false);
       setScreen('playing');
       engineRef.current?.setPaused(false);
       audioManager.setAmbientMode('world', hud?.worldId ?? 1);
@@ -535,10 +622,52 @@ export default function App() {
     engineRef.current?.releaseTouchJump();
   }, []);
 
+  // Native Android Back navigation handler (preserves Landscape orientation across all screens)
+  useEffect(() => {
+    return subscribeNativeAndroidBackButton(() => {
+      if (customizingControlsRef.current) {
+        setCustomizingControls(false);
+        return;
+      }
+      if (settingsOpenRef.current) {
+        setSettingsOpen(false);
+        return;
+      }
+      if (howToPlayOpenRef.current) {
+        setHowToPlayOpen(false);
+        return;
+      }
+      if (creditsOpenRef.current) {
+        setCreditsOpen(false);
+        return;
+      }
+      if (wheelOpenRef.current) {
+        setWheelOpen(false);
+        return;
+      }
+      if (screenRef.current === 'playing' || screenRef.current === 'paused') {
+        callbacksRef.current.onTogglePause();
+        return;
+      }
+      if (screenRef.current === 'world_map' || screenRef.current === 'level_complete') {
+        returnToTitle();
+      }
+    });
+  }, [returnToTitle]);
+
   // Title-to-Start Keyboard Handshake (Enter / Space starts immediately once loading completes)
   useEffect(() => {
     const onTitleKey = (e: KeyboardEvent) => {
-      if (loadingPhase !== 'done' || screen !== 'title' || settingsOpen || howToPlayOpen || creditsOpen) return;
+      if (
+        loadingPhase !== 'done' ||
+        screen !== 'title' ||
+        settingsOpen ||
+        howToPlayOpen ||
+        creditsOpen ||
+        orientationState.requiresLandscapeRotation
+      ) {
+        return;
+      }
       if (e.code === 'Enter' || e.code === 'Space') {
         e.preventDefault();
         const hasProgress = save.completedLevels.length > 0 || save.unlockedLevel > 1;
@@ -547,7 +676,18 @@ export default function App() {
     };
     window.addEventListener('keydown', onTitleKey);
     return () => window.removeEventListener('keydown', onTitleKey);
-  }, [loadingPhase, screen, settingsOpen, howToPlayOpen, creditsOpen, save.completedLevels.length, save.unlockedLevel, save.lastPlayedLevel, startLevel]);
+  }, [
+    loadingPhase,
+    screen,
+    settingsOpen,
+    howToPlayOpen,
+    creditsOpen,
+    orientationState.requiresLandscapeRotation,
+    save.completedLevels.length,
+    save.unlockedLevel,
+    save.lastPlayedLevel,
+    startLevel,
+  ]);
 
   const showTouchControls =
     save.settings.touchMode === 'on' ||
@@ -559,7 +699,10 @@ export default function App() {
   }, []);
 
   return (
-    <main className="relative w-full h-full overflow-hidden bg-[#0B0D14]">
+    <main
+      data-orientation={orientationState.orientation}
+      className="relative w-full h-full overflow-hidden bg-[#0B0D14]"
+    >
       {/* Isolated Phaser 3 Full-Viewport Canvas */}
       <div
         ref={mountRef}
@@ -636,7 +779,14 @@ export default function App() {
           t={t}
           isMobile={viewportProfile.isMobile}
           orientation={viewportProfile.orientation}
-          showTouchControls={showTouchControls && screen === 'playing' && !wheelOpen}
+          showTouchControls={
+            showTouchControls &&
+            screen === 'playing' &&
+            !wheelOpen &&
+            !customizingControls &&
+            !orientationState.requiresLandscapeRotation
+          }
+          customControlsLayout={save.settings.mobileControlsLayout}
           checkpointBanner={checkpointBanner}
           onSelectColor={handleSelectColor}
           onOpenWheel={() => {
@@ -720,7 +870,7 @@ export default function App() {
       )}
 
       {/* Settings Modal */}
-      {settingsOpen && (
+      {settingsOpen && !customizingControls && (
         <SettingsModal
           t={t}
           settings={save.settings}
@@ -729,11 +879,32 @@ export default function App() {
           onRetryMusic={() => {
             void handleRetryMusic();
           }}
+          onOpenCustomizeControls={() => {
+            audioManager.playUiClick();
+            setCustomizingControls(true);
+          }}
           onUpdate={updateSettings}
           onResetProgress={resetProgress}
           onClose={() => {
             audioManager.playUiClick();
+            setCustomizingControls(false);
             setSettingsOpen(false);
+          }}
+        />
+      )}
+
+      {/* Dedicated Mobile Control Layout Customization Screen */}
+      {settingsOpen && customizingControls && (
+        <MobileControlsCustomizer
+          t={t}
+          initialLayout={save.settings.mobileControlsLayout}
+          onSave={(layout) => {
+            updateSettings({ mobileControlsLayout: layout });
+            setCustomizingControls(false);
+          }}
+          onCancel={() => {
+            audioManager.playUiClick();
+            setCustomizingControls(false);
           }}
         />
       )}
@@ -768,6 +939,13 @@ export default function App() {
           audioWarning={musicWarning}
           fadingOut={loadingPhase === 'fading'}
           onRetry={handleRetryLoading}
+        />
+      )}
+
+      {/* Mobile Portrait Orientation Gate (shown ONLY on mobile browsers held in Portrait) */}
+      {orientationState.requiresLandscapeRotation && (
+        <LandscapeGateOverlay
+          onRequestLandscape={requestFullscreenLandscape}
         />
       )}
     </main>

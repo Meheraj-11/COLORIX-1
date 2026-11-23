@@ -10,6 +10,7 @@ import {
   type ColorId,
 } from '../colors';
 import { getLevelById, TOTAL_LEVEL_COUNT, WORLD_MAP } from '../levels';
+import { DEFAULT_MOBILE_CONTROLS_LAYOUT } from '../mobileControlsLayout';
 import {
   aabbOverlap,
   advanceColorLock,
@@ -234,6 +235,7 @@ export class ColorixScene extends Phaser.Scene {
     touchMode: 'auto',
     language: 'en',
     fullscreen: false,
+    mobileControlsLayout: DEFAULT_MOBILE_CONTROLS_LAYOUT,
   };
 
   // Active Color & Smooth Transition

@@ -1,4 +1,5 @@
 import { COLOR_MAP, type ActiveColor } from './colors';
+import { DEFAULT_MOBILE_CONTROLS_LAYOUT } from './mobileControlsLayout';
 import type { GameSettings } from './types';
 
 const RESOLVED_BASE_URL =
@@ -125,6 +126,7 @@ class AudioManager {
     touchMode: 'auto',
     language: 'en',
     fullscreen: false,
+    mobileControlsLayout: DEFAULT_MOBILE_CONTROLS_LAYOUT,
   };
   private unlocked = false;
 
