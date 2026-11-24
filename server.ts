@@ -1,6 +1,6 @@
 import express from 'express';
 import fs from 'fs';
-import type { IncomingMessage, ServerResponse } from 'http';
+import http, { type IncomingMessage, type ServerResponse } from 'http';
 import path from 'path';
 
 const ROOT_DIR = import.meta.dirname;
@@ -147,17 +147,26 @@ function createChunkedAudioMiddleware(isProduction: boolean) {
 
 async function startServer(): Promise<void> {
   const app = express();
+  const httpServer = http.createServer(app);
   const distDir = path.resolve(ROOT_DIR, 'dist');
   const distIndex = path.resolve(distDir, 'index.html');
   const isDev = process.env.NODE_ENV === 'development' || !fs.existsSync(distIndex);
 
-  // Serve MP3 background music in 2 MiB RFC 7233 Range chunks in BOTH dev and production deploy
+  // Serve MP3 background music in RFC 7233 Range chunks in BOTH dev and production deploy
   app.use(createChunkedAudioMiddleware(!isDev));
 
   if (isDev) {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        port: PORT,
+        // Attach Vite's WebSocket server to Express's HTTP server instead of
+        // spawning an unreachable standalone WebSocket port (24678) behind proxies.
+        ws: {
+          server: httpServer,
+        },
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);
@@ -168,7 +177,7 @@ async function startServer(): Promise<void> {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`COLORIX server running on http://0.0.0.0:${PORT} (${isDev ? 'development' : 'production'})`);
   });
 }

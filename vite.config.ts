@@ -152,6 +152,27 @@ function serveChunkedAudioPlugin(): Plugin {
   };
 }
 
+function resolveAllowedHosts(): string[] {
+  const hosts = new Set<string>(['.run.app']);
+  const ngAllowed = process.env.NG_ALLOWED_HOSTS;
+  if (ngAllowed) {
+    for (const host of ngAllowed.split(',')) {
+      const trimmed = host.trim();
+      if (trimmed) hosts.add(trimmed);
+    }
+  }
+  const appUrl = process.env.APP_URL;
+  if (appUrl) {
+    try {
+      const parsed = new URL(appUrl);
+      if (parsed.hostname) hosts.add(parsed.hostname);
+    } catch {
+      // Ignore malformed APP_URL values
+    }
+  }
+  return Array.from(hosts);
+}
+
 export default defineConfig(() => {
   return {
     plugins: [
@@ -199,6 +220,7 @@ export default defineConfig(() => {
       },
     },
     server: {
+      allowedHosts: resolveAllowedHosts(),
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
       // Do not modify—file watching is disabled to prevent flickering during agent edits.
       hmr: process.env.DISABLE_HMR !== 'true',

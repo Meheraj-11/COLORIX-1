@@ -157,13 +157,51 @@ export function buildModularLevel(levelId: number, worldId: WorldId, indexInWorl
     const cB = pickColor(segIdx * 2 + 1);
     const cC = pickColor(segIdx * 2 + 2);
 
-    // Add a checkpoint before later segments on longer levels
+    // Add a checkpoint before later segments on longer levels (safely clear of hazards, gates, and walls)
     if (segIdx === Math.floor(segments.length / 2) && segIdx > 0) {
-      checkpoints.push({
-        id: nextId('cp'),
-        x: cursorX - 95,
-        y: floorY,
-      });
+      const hostFloor = [...platforms]
+        .reverse()
+        .find(
+          (p) =>
+            p.kind === 'neutral' &&
+            Math.abs(p.y - floorY) <= 2 &&
+            p.x <= cursorX - 10 &&
+            p.x + p.w >= cursorX - 2,
+        );
+      const isSafeCheckpointX = (cx: number): boolean => {
+        if (!hostFloor || cx < hostFloor.x + 20 || cx > hostFloor.x + hostFloor.w - 20) return false;
+        const bx1 = cx - 16;
+        const bx2 = cx + 16;
+        const by1 = floorY - 48;
+        const by2 = floorY - 2;
+        const overlapsAny = (x: number, y: number, w: number, h: number) =>
+          bx1 < x + w && bx2 > x && by1 < y + h && by2 > y;
+        if (hazards.some((h) => overlapsAny(h.x, h.y, h.w, h.h))) return false;
+        if (gates.some((g) => overlapsAny(g.x, g.y, g.w, g.h))) return false;
+        if (
+          platforms.some(
+            (p) => p !== hostFloor && Math.abs(p.y - floorY) > 2 && overlapsAny(p.x, p.y, p.w, p.h),
+          )
+        ) {
+          return false;
+        }
+        return true;
+      };
+
+      const candidates = [cursorX - 95, cursorX - 36, cursorX - 44, cursorX - 28];
+      if (hostFloor) {
+        for (let scanX = hostFloor.x + hostFloor.w - 24; scanX >= hostFloor.x + 24; scanX -= 16) {
+          candidates.push(scanX);
+        }
+      }
+      const safeCpX = candidates.find(isSafeCheckpointX);
+      if (safeCpX !== undefined) {
+        checkpoints.push({
+          id: nextId('cp'),
+          x: Math.round(safeCpX),
+          y: floorY,
+        });
+      }
     }
 
     if (seg === 'color_steps') {
@@ -646,6 +684,15 @@ export function buildModularLevel(levelId: number, worldId: WorldId, indexInWorl
     const overlapsHazard = hazards.some((h) => h.x < maxX && h.x + h.w > minX && Math.abs(h.y + h.h - p.y) < 40);
     const overlapsGate = gates.some((g) => g.x < maxX && g.x + g.w > minX && Math.abs(g.y + g.h - p.y) < 40);
     const overlapsCheckpoint = checkpoints.some((cp) => cp.x >= minX - 35 && cp.x <= maxX + 35 && Math.abs(cp.y - p.y) < 40);
+    const overlapsWall = platforms.some(
+      (other) =>
+        other !== p &&
+        Math.abs(other.y - p.y) > 2 &&
+        other.x < maxX &&
+        other.x + other.w > minX &&
+        other.y < p.y &&
+        other.y + other.h > p.y - 44,
+    );
 
     let patrolMinX = minX;
     let patrolMaxX = maxX;
@@ -653,7 +700,7 @@ export function buildModularLevel(levelId: number, worldId: WorldId, indexInWorl
     if (overlapsPortal) {
       patrolMaxX = Math.min(patrolMaxX, portal.x - 68);
     }
-    if (overlapsHazard || overlapsGate || overlapsCheckpoint) continue;
+    if (overlapsHazard || overlapsGate || overlapsCheckpoint || overlapsWall) continue;
     if (patrolMaxX - patrolMinX < 105) continue;
 
     const archetype = archetypePool[(monsters.length + levelId) % archetypePool.length];
